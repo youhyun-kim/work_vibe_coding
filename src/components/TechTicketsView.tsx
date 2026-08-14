@@ -135,7 +135,20 @@ export const TechTicketsView: React.FC<TechTicketsViewProps> = ({
 
       {/* Tickets Cards List */}
       <div className="space-y-4">
-        {filteredTickets.map((t) => (
+        {filteredTickets.length === 0 ? (
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-12 text-center space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-400 mx-auto">
+              <Wrench className="w-6 h-6 text-amber-400" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-slate-200">등록된 기술지원 티켓이 없습니다</h3>
+              <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                필요 시 상단의 [+ 신규 A/S 티켓 발행] 버튼을 눌러 독일 본사 기술지원 건을 등록할 수 있습니다.
+              </p>
+            </div>
+          </div>
+        ) : (
+          filteredTickets.map((t) => (
           <div
             key={t.id}
             className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl p-5 shadow-lg transition-all space-y-3"
@@ -213,7 +226,8 @@ export const TechTicketsView: React.FC<TechTicketsViewProps> = ({
               </div>
             </div>
           </div>
-        ))}
+          ))
+        )}
       </div>
 
       {/* Modal for Creating New Ticket */}

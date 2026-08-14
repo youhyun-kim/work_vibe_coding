@@ -61,7 +61,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
   const [isRemoteVideoOff, setIsRemoteVideoOff] = useState(false);
   const [isTtsEnabled, setIsTtsEnabled] = useState(true);
   const [translationDirection, setTranslationDirection] = useState<'ko_to_en' | 'ko_to_de' | 'en_to_ko' | 'de_to_ko'>(
-    isEurotechUser ? 'ko_to_de' : 'de_to_ko'
+    'ko_to_en'
   );
 
   // Audio & STT State
@@ -76,26 +76,9 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
   const [sttStatusMessage, setSttStatusMessage] = useState<string>('🎙️ 마이크 권한 허용 후 실시간 음성인식이 시작됩니다.');
   const [sttErrorNotice, setSttErrorNotice] = useState<string | null>(null);
 
-  // Messages & Subtitles State
-  const [messages, setMessages] = useState<SubtitleMessage[]>([
-    {
-      id: 'init_1',
-      speakerId: remoteUser.id,
-      speakerName: remoteUser.name,
-      company: remoteUser.company,
-      originalText: isEurotechUser
-        ? 'Guten Tag! Willkommen zur Eurotech & Wallpen HQ Konferenz.'
-        : '안녕하세요! 유로테크 화상회의 채널에 오신 것을 환영합니다.',
-      originalLang: isEurotechUser ? 'de' : 'ko',
-      translatedText: isEurotechUser
-        ? '안녕하십니까! 유로테크 한국 총판과 Wallpen 독일 본사 화상회의에 오신 것을 환영합니다.'
-        : 'Hello! Welcome to Eurotech Korea & Wallpen Germany HQ video conference.',
-      translatedLang: isEurotechUser ? 'ko' : 'en',
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    },
-  ]);
-
-  const [currentSubtitle, setCurrentSubtitle] = useState<SubtitleMessage | null>(messages[0]);
+  // Messages & Subtitles State (Empty initially - No dummy data)
+  const [messages, setMessages] = useState<SubtitleMessage[]>([]);
+  const [currentSubtitle, setCurrentSubtitle] = useState<SubtitleMessage | null>(null);
   const [liveInterimSpeech, setLiveInterimSpeech] = useState<string>('');
   const [inputManualText, setInputManualText] = useState<string>('');
   const [isTranslating, setIsTranslating] = useState<boolean>(false);
@@ -900,17 +883,17 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
               onChange={(e: any) => setTranslationDirection(e.target.value)}
               className="bg-transparent text-amber-300 font-bold focus:outline-none cursor-pointer"
             >
+              <option value="ko_to_en" className="bg-slate-900 text-white">
+                🇰🇷 한국어 ➔ 🇺🇸 영어 (US English) [기본]
+              </option>
+              <option value="en_to_ko" className="bg-slate-900 text-white">
+                🇺🇸 영어 ➔ 🇰🇷 한국어 (KO)
+              </option>
               <option value="ko_to_de" className="bg-slate-900 text-white">
                 🇰🇷 한국어 ➔ 🇩🇪 독일어 (DE)
               </option>
-              <option value="ko_to_en" className="bg-slate-900 text-white">
-                🇰🇷 한국어 ➔ 🇺🇸 미국식 네이티브 영어 (US English)
-              </option>
               <option value="de_to_ko" className="bg-slate-900 text-white">
                 🇩🇪 독일어 ➔ 🇰🇷 한국어 (KO)
-              </option>
-              <option value="en_to_ko" className="bg-slate-900 text-white">
-                🇺🇸 미국식 네이티브 영어 ➔ 🇰🇷 한국어 (KO)
               </option>
             </select>
           </div>
@@ -1278,46 +1261,6 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                 </button>
               </div>
             </div>
-
-            {/* Quick 1-Click Meeting Technical Speech Tests (원클릭 기술 발화 테스트) */}
-            <div className="flex items-center gap-2 flex-wrap pt-1">
-              <span className="text-[11px] font-bold text-slate-300 flex items-center gap-1">
-                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                원클릭 음성 발화 테스트:
-              </span>
-              <button
-                onClick={() => {
-                  triggerVirtualAudioSpeaking('성수동 현장에 Wallpen E2 장비 설치 후 노즐 테스트를 완료했습니다.');
-                }}
-                className="bg-slate-900 hover:bg-slate-800 text-amber-300 border border-slate-700 text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
-              >
-                🇰🇷 "노즐 테스트 완료했습니다"
-              </button>
-              <button
-                onClick={() => {
-                  triggerVirtualAudioSpeaking('Wallpen 레이저 벽면 거리 센서 측정 캘리브레이션 확인 부탁드립니다.');
-                }}
-                className="bg-slate-900 hover:bg-slate-800 text-emerald-300 border border-slate-700 text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
-              >
-                🇰🇷 "벽면 센서 캘리브레이션 점검"
-              </button>
-              <button
-                onClick={() => {
-                  triggerVirtualAudioSpeaking('We have successfully completed the printhead nozzle calibration and test.', remoteUser);
-                }}
-                className="bg-slate-900 hover:bg-slate-800 text-blue-300 border border-slate-700 text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
-              >
-                🇺🇸 "US: Completed nozzle test"
-              </button>
-              <button
-                onClick={() => {
-                  triggerVirtualAudioSpeaking('Guten Tag! Die Laser-Wandabstandssensoren sind kalibriert.', remoteUser);
-                }}
-                className="bg-slate-900 hover:bg-slate-800 text-indigo-300 border border-slate-700 text-[11px] font-semibold px-2.5 py-1 rounded-lg transition-colors"
-              >
-                🇩🇪 "DE: Sensoren sind kalibriert"
-              </button>
-            </div>
           </div>
 
           {/* AI Translation Processing Notification Banner */}
@@ -1416,56 +1359,70 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
 
             {/* Transcript Messages List (Newest at Top) */}
             <div ref={transcriptContainerRef} className="flex-1 p-3 overflow-y-auto space-y-3">
-              {[...messages].slice().reverse().map((m, idx) => {
-                const isLatest = idx === 0;
-                const info = getSpeakerInfo(m.company, m.speakerName);
-
-                return (
-                  <div
-                    key={m.id}
-                    className={`p-3 rounded-xl text-xs space-y-1.5 border transition-all ${
-                      isLatest
-                        ? `${info.boxStyle} ring-2 ring-amber-400/50 shadow-xl`
-                        : info.boxStyle
-                    }`}
-                  >
-                    <div className="flex items-center justify-between text-[10px] text-slate-400">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="text-sm leading-none">{info.flag}</span>
-                        <span className={`font-bold ${info.nameColor}`}>{m.speakerName}</span>
-                        <span className={`text-[9px] px-1.5 py-0.2 rounded border font-semibold ${info.badgeStyle}`}>
-                          {info.companyLabel}
-                        </span>
-                        {isLatest && (
-                          <span className="bg-amber-400/20 text-amber-300 text-[9px] font-bold px-1.5 py-0.2 rounded border border-amber-400/40">
-                            NEW
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center space-x-1.5 shrink-0">
-                        <span>{m.timestamp}</span>
-                        <button
-                          onClick={() => copyToClipboard(m.translatedText, m.id)}
-                          className="text-slate-400 hover:text-amber-400 p-0.5"
-                          title="번역문 복사"
-                        >
-                          {copiedId === m.id ? (
-                            <Check className="w-3 h-3 text-emerald-400" />
-                          ) : (
-                            <Copy className="w-3 h-3" />
-                          )}
-                        </button>
-                      </div>
-                    </div>
-
-                    <p className="text-slate-200 font-medium pl-0.5">{m.originalText}</p>
-                    <div className="pt-1.5 border-t border-slate-700/50 text-amber-300 font-semibold flex items-start gap-1 pl-0.5">
-                      <Globe2 className="w-3 h-3 shrink-0 mt-0.5 text-amber-400" />
-                      <span>{m.translatedText}</span>
-                    </div>
+              {messages.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-center p-4 space-y-3">
+                  <div className="w-10 h-10 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-400">
+                    <MessageSquare className="w-5 h-5 text-blue-400" />
                   </div>
-                );
-              })}
+                  <div className="space-y-1">
+                    <p className="text-xs font-bold text-slate-200">기록된 회의 대화가 없습니다</p>
+                    <p className="text-[11px] text-slate-400 leading-relaxed max-w-[210px]">
+                      마이크로 말씀하시거나 아래 텍스트를 입력하면 실시간 통역 자막과 회의록이 이곳에 기록됩니다.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                [...messages].slice().reverse().map((m, idx) => {
+                  const isLatest = idx === 0;
+                  const info = getSpeakerInfo(m.company, m.speakerName);
+
+                  return (
+                    <div
+                      key={m.id}
+                      className={`p-3 rounded-xl text-xs space-y-1.5 border transition-all ${
+                        isLatest
+                          ? `${info.boxStyle} ring-2 ring-amber-400/50 shadow-xl`
+                          : info.boxStyle
+                      }`}
+                    >
+                      <div className="flex items-center justify-between text-[10px] text-slate-400">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-sm leading-none">{info.flag}</span>
+                          <span className={`font-bold ${info.nameColor}`}>{m.speakerName}</span>
+                          <span className={`text-[9px] px-1.5 py-0.2 rounded border font-semibold ${info.badgeStyle}`}>
+                            {info.companyLabel}
+                          </span>
+                          {isLatest && (
+                            <span className="bg-amber-400/20 text-amber-300 text-[9px] font-bold px-1.5 py-0.2 rounded border border-amber-400/40">
+                              NEW
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center space-x-1.5 shrink-0">
+                          <span>{m.timestamp}</span>
+                          <button
+                            onClick={() => copyToClipboard(m.translatedText, m.id)}
+                            className="text-slate-400 hover:text-amber-400 p-0.5"
+                            title="번역문 복사"
+                          >
+                            {copiedId === m.id ? (
+                              <Check className="w-3 h-3 text-emerald-400" />
+                            ) : (
+                              <Copy className="w-3 h-3" />
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      <p className="text-slate-200 font-medium pl-0.5">{m.originalText}</p>
+                      <div className="pt-1.5 border-t border-slate-700/50 text-amber-300 font-semibold flex items-start gap-1 pl-0.5">
+                        <Globe2 className="w-3 h-3 shrink-0 mt-0.5 text-amber-400" />
+                        <span>{m.translatedText}</span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
 
             {/* AI Summarize Button inside Drawer */}

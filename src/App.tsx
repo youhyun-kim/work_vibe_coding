@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { UserProfile, MainViewTab, TechTicket, MeetingRecord, SubtitleMessage } from './types';
-import { MOCK_USERS, MOCK_TICKETS, MOCK_MEETINGS } from './data/mockData';
+import { MOCK_USERS } from './data/mockData';
 import { Header } from './components/Header';
 import { SidebarNav } from './components/SidebarNav';
 import { VideoConferenceView } from './components/VideoConferenceView';
@@ -18,9 +18,9 @@ export default function App() {
   // Main view tab state
   const [currentTab, setCurrentTab] = useState<MainViewTab>('video_conference');
 
-  // Interactive datasets
-  const [tickets, setTickets] = useState<TechTicket[]>(MOCK_TICKETS);
-  const [meetings, setMeetings] = useState<MeetingRecord[]>(MOCK_MEETINGS);
+  // Interactive datasets (clean initial state, no dummy data)
+  const [tickets, setTickets] = useState<TechTicket[]>([]);
+  const [meetings, setMeetings] = useState<MeetingRecord[]>([]);
 
   // Video call active state
   const [isCallActive, setIsCallActive] = useState<boolean>(true);
