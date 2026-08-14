@@ -1,6 +1,7 @@
 import React from 'react';
 import { UserProfile, CompanyType } from '../types';
 import { MOCK_USERS } from '../data/mockData';
+import { FlagAvatar } from './FlagAvatar';
 import {
   X,
   User,
@@ -79,13 +80,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                     }`}
                   >
                     <div className="flex items-center space-x-3">
-                      <div className="w-10 h-10 rounded-full overflow-hidden ring-2 ring-blue-500/50 bg-white flex items-center justify-center shrink-0 shadow">
-                        <img
-                          src={u.avatar}
-                          alt={u.name}
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
+                      <FlagAvatar country={u.company} size="lg" />
                       <div>
                         <div className="font-bold text-xs text-slate-100 flex items-center gap-1">
                           <span>{u.name}</span>
@@ -127,13 +122,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                     }`}
                   >
                     <div className="flex items-center space-x-3">
-                      <div className="w-10 h-10 rounded-full overflow-hidden ring-2 ring-amber-500/50 bg-slate-950 flex items-center justify-center shrink-0 shadow">
-                        <img
-                          src={u.avatar}
-                          alt={u.name}
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
+                      <FlagAvatar country={u.company} size="lg" />
                       <div>
                         <div className="font-bold text-xs text-slate-100 flex items-center gap-1">
                           <span>{u.name}</span>

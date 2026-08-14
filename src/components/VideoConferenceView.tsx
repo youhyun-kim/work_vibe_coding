@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { UserProfile, SubtitleMessage, CompanyType } from '../types';
-import { MOCK_USERS, QUICK_GLOSSARY_PHRASES, KOREA_FLAG_AVATAR, GERMANY_FLAG_AVATAR } from '../data/mockData';
+import { MOCK_USERS, QUICK_GLOSSARY_PHRASES } from '../data/mockData';
 import { getSpeakerInfo } from '../utils/speakerUtils';
 import { translateOffline } from '../utils/translationEngine';
 import { WhiteboardModal } from './WhiteboardModal';
+import { FlagAvatar } from './FlagAvatar';
 import {
   Mic,
   MicOff,
@@ -506,10 +507,38 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
     }
   };
 
+  // Helper to ensure AudioContext is active (resumes from browser autoplay suspension)
+  const resumeAudioContextIfNeeded = useCallback(() => {
+    if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume().catch((e) => console.log('AudioContext auto-resume note:', e));
+    }
+  }, []);
+
   // Function to initialize or restart microphone stream
   const initializeAudioStream = async (isUserInitiated: boolean = false) => {
     try {
       setSttErrorNotice(null);
+
+      // Clean up any existing stream/nodes
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
+      if (audioStreamRef.current) {
+        audioStreamRef.current.getTracks().forEach((t) => {
+          try {
+            t.stop();
+          } catch (e) {}
+        });
+        audioStreamRef.current = null;
+      }
+      if (audioContextRef.current) {
+        try {
+          audioContextRef.current.close();
+        } catch (e) {}
+        audioContextRef.current = null;
+      }
+
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         setSttErrorNotice(
           '현재 브라우저 환경에서는 직접 마이크 장치 접근이 제한되어 있습니다. [가상 마이크 / 음성 시뮬레이터] 또는 [텍스트 입력]을 사용하실 수 있습니다.'
@@ -529,7 +558,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       audioStreamRef.current = stream;
       setMicPermissionState('granted');
       setIsVirtualMicActive(false);
-      setSttStatusMessage('🎤 마이크 연결됨 (초고감도 음성 센싱 가동 중)');
+      setSttStatusMessage('🎤 마이크 정상 가동 중 (초고감도 실시간 음성 센싱)');
 
       // Setup Web Audio Analyser for visualizer, VAD & Pitch / Gender estimation
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -559,6 +588,10 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
 
         const updateAudioMetrics = () => {
           if (!analyserRef.current) return;
+          if (ctx.state === 'suspended') {
+            ctx.resume().catch(() => {});
+          }
+
           analyserRef.current.getByteFrequencyData(freqData);
           analyserRef.current.getByteTimeDomainData(timeData);
 
@@ -569,7 +602,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
             sumSquares += normalized * normalized;
           }
           const rms = Math.sqrt(sumSquares / timeData.length);
-          const computedVolume = Math.min(100, Math.round(rms * 320));
+          const computedVolume = Math.min(100, Math.round(rms * 340));
 
           // 8-Band Frequency Visualizer
           const bands: number[] = [0, 0, 0, 0, 0, 0, 0, 0];
@@ -906,7 +939,10 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
   // Main lifecycle for Audio Stream & Mute toggle
   useEffect(() => {
     if (isMuted) {
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
       if (audioStreamRef.current) {
         audioStreamRef.current.getAudioTracks().forEach((t) => (t.enabled = false));
       }
@@ -922,16 +958,30 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       return;
     }
 
-    if (audioStreamRef.current) {
-      audioStreamRef.current.getAudioTracks().forEach((t) => (t.enabled = true));
-    } else if (micPermissionState !== 'denied') {
+    // Unmuted state: Ensure full stream & analyzer pipeline is running
+    setSttStatusMessage('🎤 마이크 정상 가동 중 (초고감도 실시간 음성 센싱)');
+    resumeAudioContextIfNeeded();
+
+    if (!audioStreamRef.current || !audioStreamRef.current.active || !audioContextRef.current) {
       initializeAudioStream(false);
+    } else {
+      audioStreamRef.current.getAudioTracks().forEach((t) => (t.enabled = true));
+      if (!animFrameRef.current) {
+        initializeAudioStream(false);
+      }
+    }
+
+    if (isAutoSttEnabled) {
+      startWebSpeechRecognition();
     }
 
     return () => {
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
     };
-  }, [isMuted, translationDirection]);
+  }, [isMuted, translationDirection, isAutoSttEnabled]);
 
   // Webcam stream management (Robust Start/Stop/Restart Lifecycle)
   const stopWebcam = useCallback(() => {
@@ -1293,13 +1343,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
 
                 {isVideoOff ? (
                   <div className="relative z-10 flex flex-col items-center justify-center p-6 text-center space-y-3">
-                    <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full overflow-hidden flex items-center justify-center border-2 border-blue-500 shadow-2xl ring-4 ring-blue-500/30 bg-white">
-                      <img
-                        src={currentUser.company === 'eurotech_korea' ? KOREA_FLAG_AVATAR : GERMANY_FLAG_AVATAR}
-                        alt={currentUser.name}
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
+                    <FlagAvatar country={currentUser.company} size="2xl" />
                     <div className="space-y-1">
                       <div className="flex items-center justify-center gap-1.5">
                         <span className="text-base">{currentUser.company === 'eurotech_korea' ? '🇰🇷' : '🇩🇪'}</span>
@@ -1314,13 +1358,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                 ) : !hasWebcamStream ? (
                   <div className="relative z-10 w-full h-full flex flex-col items-center justify-center p-6 text-center">
                     <div className="relative mb-3">
-                      <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full overflow-hidden bg-white flex items-center justify-center text-white shadow-2xl ring-4 ring-blue-400/40 border-2 border-blue-400">
-                        <img
-                          src={currentUser.company === 'eurotech_korea' ? KOREA_FLAG_AVATAR : GERMANY_FLAG_AVATAR}
-                          alt={currentUser.name}
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
+                      <FlagAvatar country={currentUser.company} size="2xl" />
                       <span className="absolute bottom-0 right-0 w-5 h-5 rounded-full bg-emerald-500 border-2 border-slate-900 flex items-center justify-center">
                         <span className="w-2 h-2 rounded-full bg-white animate-ping"></span>
                       </span>
@@ -1371,13 +1409,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
               <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950/60">
                 {isRemoteVideoOff ? (
                   <div className="flex flex-col items-center justify-center p-6 text-center space-y-3">
-                    <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full overflow-hidden flex items-center justify-center border-2 border-amber-500 shadow-2xl ring-4 ring-amber-500/30 bg-slate-950">
-                      <img
-                        src={remoteUser.company === 'eurotech_korea' ? KOREA_FLAG_AVATAR : GERMANY_FLAG_AVATAR}
-                        alt={remoteUser.name}
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
+                    <FlagAvatar country={remoteUser.company} size="2xl" />
                     <div className="space-y-1">
                       <div className="flex items-center justify-center gap-1.5">
                         <span className="text-base">{remoteUser.company === 'eurotech_korea' ? '🇰🇷' : '🇩🇪'}</span>
@@ -1392,13 +1424,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                 ) : (
                   <div className="relative w-full h-full flex flex-col items-center justify-center p-6 text-center">
                     <div className="relative mb-3">
-                      <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full overflow-hidden bg-slate-950 flex items-center justify-center text-white shadow-2xl ring-4 ring-amber-400/40 border-2 border-amber-400">
-                        <img
-                          src={remoteUser.company === 'eurotech_korea' ? KOREA_FLAG_AVATAR : GERMANY_FLAG_AVATAR}
-                          alt={remoteUser.name}
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
+                      <FlagAvatar country={remoteUser.company} size="2xl" />
                       <span className="absolute bottom-0 right-0 w-5 h-5 rounded-full bg-emerald-500 border-2 border-slate-900 flex items-center justify-center">
                         <span className="w-2 h-2 rounded-full bg-white animate-ping"></span>
                       </span>
@@ -1552,8 +1578,12 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
             {/* Engine Status Line */}
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 bg-slate-950/90 p-2 rounded-xl border border-slate-800 text-xs">
               <div className="text-[11px] font-medium text-emerald-300 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0" />
-                <span>{sttStatusMessage}</span>
+                <span className={`w-2 h-2 rounded-full shrink-0 ${!isMuted ? 'bg-emerald-400 animate-ping' : 'bg-rose-500'}`} />
+                <span>
+                  {!isMuted && sttStatusMessage.includes('꺼져 있습니다')
+                    ? '🎤 마이크 정상 가동 중 (말씀하시면 실시간 자동 센싱)'
+                    : sttStatusMessage}
+                </span>
               </div>
 
               <div className="flex items-center gap-2 flex-wrap">
@@ -1561,7 +1591,10 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                 <div className="flex items-center bg-slate-900 border border-slate-700 rounded-lg p-0.5 text-[10px]">
                   <span className="text-slate-400 px-1.5 font-medium">감도:</span>
                   <button
-                    onClick={() => setMicSensitivity('ultra')}
+                    onClick={() => {
+                      resumeAudioContextIfNeeded();
+                      setMicSensitivity('ultra');
+                    }}
                     className={`px-2 py-0.5 rounded font-bold transition-colors ${
                       micSensitivity === 'ultra'
                         ? 'bg-emerald-500 text-slate-950 shadow'
@@ -1571,7 +1604,10 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                     ⚡ 초고감도 (3.5x)
                   </button>
                   <button
-                    onClick={() => setMicSensitivity('high')}
+                    onClick={() => {
+                      resumeAudioContextIfNeeded();
+                      setMicSensitivity('high');
+                    }}
                     className={`px-2 py-0.5 rounded font-bold transition-colors ${
                       micSensitivity === 'high'
                         ? 'bg-teal-500 text-slate-950 shadow'
@@ -1581,7 +1617,10 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                     🔊 고감도 (2.0x)
                   </button>
                   <button
-                    onClick={() => setMicSensitivity('standard')}
+                    onClick={() => {
+                      resumeAudioContextIfNeeded();
+                      setMicSensitivity('standard');
+                    }}
                     className={`px-2 py-0.5 rounded font-bold transition-colors ${
                       micSensitivity === 'standard'
                         ? 'bg-slate-700 text-white shadow'
@@ -1604,10 +1643,13 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                 </button>
 
                 <button
-                  onClick={initializeAudioStream}
-                  className="text-[10px] font-bold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2.5 py-1 rounded-lg flex items-center gap-1 transition-colors"
+                  onClick={() => {
+                    resumeAudioContextIfNeeded();
+                    initializeAudioStream(true);
+                  }}
+                  className="text-[10px] font-bold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2.5 py-1 rounded-lg flex items-center gap-1 transition-colors active:scale-95"
                 >
-                  <RefreshCw className="w-3 h-3" />
+                  <RefreshCw className="w-3 h-3 text-emerald-400" />
                   <span>마이크 재연결</span>
                 </button>
               </div>
@@ -1787,13 +1829,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                     >
                       <div className="flex items-center justify-between text-[10px] text-slate-400">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <div className="w-4 h-4 rounded-full overflow-hidden ring-1 ring-slate-600 shrink-0 bg-white flex items-center justify-center shadow-sm">
-                            <img
-                              src={m.company === 'eurotech_korea' ? KOREA_FLAG_AVATAR : GERMANY_FLAG_AVATAR}
-                              alt={m.speakerName}
-                              className="w-full h-full object-cover"
-                            />
-                          </div>
+                          <FlagAvatar country={m.company} size="xs" />
                           <span className={`font-bold ${info.nameColor}`}>{m.speakerName}</span>
                           <span className={`text-[9px] px-1.5 py-0.2 rounded border font-semibold ${info.badgeStyle}`}>
                             {info.companyLabel}
@@ -1878,7 +1914,16 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
         {/* Left: Media Control Buttons (Conference Call Audio/Video) */}
         <div className="flex items-center space-x-2 shrink-0 flex-wrap gap-y-2">
           <button
-            onClick={() => setIsMuted(!isMuted)}
+            onClick={() => {
+              const nextMuted = !isMuted;
+              setIsMuted(nextMuted);
+              if (!nextMuted) {
+                resumeAudioContextIfNeeded();
+                if (!audioStreamRef.current || !audioStreamRef.current.active) {
+                  initializeAudioStream(true);
+                }
+              }
+            }}
             className={`p-2.5 rounded-xl border font-bold text-xs flex items-center space-x-1.5 transition-all shadow-md ${
               !isMuted
                 ? 'bg-emerald-600 text-white border-emerald-400 ring-2 ring-emerald-400/50 shadow-emerald-500/20'

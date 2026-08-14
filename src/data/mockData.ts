@@ -1,9 +1,10 @@
 import { UserProfile, TechTicket, MeetingRecord, WallpenManualItem } from '../types';
 
 export const KOREA_FLAG_AVATAR =
-  'https://upload.wikimedia.org/wikipedia/commons/thumb/0/09/Flag_of_South_Korea.svg/512px-Flag_of_South_Korea.svg.png';
+  'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 48"><rect width="72" height="48" fill="%23ffffff"/><g transform="translate(18,14) rotate(-33.69)" stroke="%23000000" stroke-width="1.8" stroke-linecap="round"><line x1="-7" y1="-3.2" x2="7" y2="-3.2"/><line x1="-7" y1="0" x2="7" y2="0"/><line x1="-7" y1="3.2" x2="7" y2="3.2"/></g><g transform="translate(54,34) rotate(-33.69)" stroke="%23000000" stroke-width="1.8" stroke-linecap="round"><line x1="-7" y1="-3.2" x2="-1.2" y2="-3.2"/><line x1="1.2" y1="-3.2" x2="7" y2="-3.2"/><line x1="-7" y1="0" x2="-1.2" y2="0"/><line x1="1.2" y1="0" x2="7" y2="0"/><line x1="-7" y1="3.2" x2="-1.2" y2="3.2"/><line x1="1.2" y1="3.2" x2="7" y2="3.2"/></g><g transform="translate(54,14) rotate(33.69)" stroke="%23000000" stroke-width="1.8" stroke-linecap="round"><line x1="-7" y1="-3.2" x2="-1.2" y2="-3.2"/><line x1="1.2" y1="-3.2" x2="7" y2="-3.2"/><line x1="-7" y1="0" x2="7" y2="0"/><line x1="-7" y1="3.2" x2="-1.2" y2="3.2"/><line x1="1.2" y1="3.2" x2="7" y2="3.2"/></g><g transform="translate(18,34) rotate(33.69)" stroke="%23000000" stroke-width="1.8" stroke-linecap="round"><line x1="-7" y1="-3.2" x2="7" y2="-3.2"/><line x1="-7" y1="0" x2="-1.2" y2="0"/><line x1="1.2" y1="0" x2="7" y2="0"/><line x1="-7" y1="3.2" x2="7" y2="3.2"/></g><g transform="translate(36,24) rotate(-33.69)"><path d="M -12,0 A 12,12 0 0,1 12,0 A 6,6 0 0,1 0,0 A 6,6 0 0,0 -12,0 Z" fill="%23cd2e3a"/><path d="M 12,0 A 12,12 0 0,1 -12,0 A 6,6 0 0,1 0,0 A 6,6 0 0,0 12,0 Z" fill="%230047a0"/></g></svg>';
+
 export const GERMANY_FLAG_AVATAR =
-  'https://upload.wikimedia.org/wikipedia/en/thumb/b/ba/Flag_of_Germany.svg/512px-Flag_of_Germany.svg.png';
+  'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 48"><rect width="72" height="16" y="0" fill="%23000000"/><rect width="72" height="16" y="16" fill="%23dd0000"/><rect width="72" height="16" y="32" fill="%23ffce00"/></svg>';
 
 export const MOCK_USERS: UserProfile[] = [
   {

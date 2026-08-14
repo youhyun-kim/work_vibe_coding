@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { UserProfile } from '../types';
+import { FlagAvatar } from './FlagAvatar';
 import {
   Video,
   User,
@@ -75,13 +76,7 @@ export const Header: React.FC<HeaderProps> = ({
               onClick={() => setShowProfileMenu(!showProfileMenu)}
               className="flex items-center space-x-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2.5 py-1.5 rounded-xl transition-colors text-left"
             >
-              <div className="w-8 h-8 rounded-full overflow-hidden ring-2 ring-blue-500/50 bg-white flex items-center justify-center shrink-0 shadow-inner">
-                <img
-                  src={currentUser.avatar}
-                  alt={currentUser.name}
-                  className="w-full h-full object-cover"
-                />
-              </div>
+              <FlagAvatar country={currentUser.company} size="md" />
               <div className="hidden lg:block">
                 <div className="text-xs font-semibold text-slate-100 flex items-center gap-1">
                   <span>{currentUser.name}</span>
@@ -100,13 +95,7 @@ export const Header: React.FC<HeaderProps> = ({
             {showProfileMenu && (
               <div className="absolute right-0 mt-2 w-64 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl py-2 z-50 text-xs">
                 <div className="px-4 py-2 border-b border-slate-700 flex items-center space-x-3">
-                  <div className="w-10 h-10 rounded-full overflow-hidden ring-2 ring-blue-500/50 bg-white flex items-center justify-center shrink-0">
-                    <img
-                      src={currentUser.avatar}
-                      alt={currentUser.name}
-                      className="w-full h-full object-cover"
-                    />
-                  </div>
+                  <FlagAvatar country={currentUser.company} size="lg" />
                   <div>
                     <p className="font-bold text-slate-100">{currentUser.name}</p>
                     <p className="text-slate-400 text-[11px]">{currentUser.email}</p>
