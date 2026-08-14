@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { UserProfile, SubtitleMessage, CompanyType } from '../types';
-import { MOCK_USERS } from '../data/mockData';
+import { MOCK_USERS, QUICK_GLOSSARY_PHRASES } from '../data/mockData';
 import { getSpeakerInfo } from '../utils/speakerUtils';
+import { translateOffline } from '../utils/translationEngine';
 import { WhiteboardModal } from './WhiteboardModal';
 import {
   Mic,
@@ -34,6 +35,7 @@ import {
   Settings,
   HelpCircle,
   RefreshCw,
+  Play,
 } from 'lucide-react';
 
 interface VideoConferenceViewProps {
@@ -64,6 +66,11 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
     'ko_to_en'
   );
 
+  // Voice Gender Selection & Real-Time Pitch Analysis
+  const [selectedVoiceGender, setSelectedVoiceGender] = useState<'auto' | 'male' | 'female'>('auto');
+  const [detectedVoiceGender, setDetectedVoiceGender] = useState<'male' | 'female'>('male');
+  const [estimatedPitchHz, setEstimatedPitchHz] = useState<number>(125);
+
   // Audio & STT State
   const [micPermissionState, setMicPermissionState] = useState<'prompt' | 'granted' | 'denied'>('prompt');
   const [isVirtualMicActive, setIsVirtualMicActive] = useState<boolean>(false);
@@ -91,8 +98,9 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [showMicHelpModal, setShowMicHelpModal] = useState<boolean>(false);
 
-  // Refs for Audio Pipeline
+  // Refs for Audio & Video Pipeline
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const videoStreamRef = useRef<MediaStream | null>(null);
   const transcriptContainerRef = useRef<HTMLDivElement | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -156,64 +164,134 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
     });
   };
 
-  // Helper: High Quality Voice Synthesis (TTS)
-  const speakText = useCallback((text: string, langCode: string) => {
-    if (!isTtsEnabled || !('speechSynthesis' in window) || !text || !text.trim()) return;
-    try {
-      window.speechSynthesis.cancel();
-      const cleanText = text.replace(/\[.*?\]/g, '').trim(); // Clean bracket notes
-      const utterance = new SpeechSynthesisUtterance(cleanText);
-      const allVoices = voicesList.length > 0 ? voicesList : window.speechSynthesis.getVoices();
+  // Helper: High Quality Gender-Aware Voice Synthesis (TTS)
+  const speakText = useCallback(
+    (text: string, langCode: string, forcedGender?: 'male' | 'female') => {
+      if (!isTtsEnabled || !('speechSynthesis' in window) || !text || !text.trim()) return;
+      try {
+        window.speechSynthesis.cancel();
 
-      if (langCode === 'ko') {
-        utterance.lang = 'ko-KR';
-        const koVoice = allVoices.find(
-          (v) =>
-            (v.lang === 'ko-KR' || v.lang.startsWith('ko')) &&
-            (v.name.includes('Google') || v.name.includes('Natural') || v.name.includes('Yuna') || v.name.includes('Heami') || v.name.includes('Korean'))
-        ) || allVoices.find((v) => v.lang.startsWith('ko'));
-        if (koVoice) utterance.voice = koVoice;
-      } else if (langCode === 'de') {
-        utterance.lang = 'de-DE';
-        const deVoice = allVoices.find(
-          (v) =>
-            (v.lang === 'de-DE' || v.lang.startsWith('de')) &&
-            (v.name.includes('Google') || v.name.includes('Natural') || v.name.includes('Katja') || v.name.includes('Hedda') || v.name.includes('German'))
-        ) || allVoices.find((v) => v.lang.startsWith('de'));
-        if (deVoice) utterance.voice = deVoice;
-      } else {
-        utterance.lang = 'en-US';
-        // Priority high quality US English voices
-        const usVoice = allVoices.find(
-          (v) =>
-            v.lang === 'en-US' &&
-            (v.name.includes('Natural') ||
-             v.name.includes('Google US English') ||
-             v.name.includes('Samantha') ||
-             v.name.includes('Jenny') ||
-             v.name.includes('Ava') ||
-             v.name.includes('Guy') ||
-             v.name.includes('Aria') ||
-             v.name.includes('David'))
-        ) || allVoices.find((v) => v.lang === 'en-US' || v.lang.startsWith('en'));
-        if (usVoice) utterance.voice = usVoice;
+        let textToSpeak = text.replace(/\[.*?\]/g, '').trim();
+
+        // If target language is English or German, but text still contains Korean characters, translate first!
+        if ((langCode === 'en' || langCode === 'de') && /[\uAC00-\uD7AF]/.test(textToSpeak)) {
+          const transResult = translateOffline(textToSpeak, 'ko', langCode as any);
+          textToSpeak = transResult.translatedText || textToSpeak;
+        }
+
+        const utterance = new SpeechSynthesisUtterance(textToSpeak);
+        const allVoices = voicesList.length > 0 ? voicesList : window.speechSynthesis.getVoices();
+
+        // Determine active voice gender
+        const targetGender: 'male' | 'female' =
+          forcedGender ||
+          (selectedVoiceGender !== 'auto' ? selectedVoiceGender : detectedVoiceGender);
+
+        if (langCode === 'ko') {
+          utterance.lang = 'ko-KR';
+          const koVoice =
+            targetGender === 'male'
+              ? allVoices.find(
+                  (v) =>
+                    (v.lang === 'ko-KR' || v.lang.startsWith('ko')) &&
+                    (v.name.includes('Male') ||
+                      v.name.includes('Minho') ||
+                      v.name.includes('InJoon') ||
+                      v.name.includes('Injoon') ||
+                      v.name.includes('Hyunwoo'))
+                ) || allVoices.find((v) => v.lang.startsWith('ko'))
+              : allVoices.find(
+                  (v) =>
+                    (v.lang === 'ko-KR' || v.lang.startsWith('ko')) &&
+                    (v.name.includes('Female') ||
+                      v.name.includes('Yuna') ||
+                      v.name.includes('Heami') ||
+                      v.name.includes('SunHi') ||
+                      v.name.includes('Natural') ||
+                      v.name.includes('Google') ||
+                      v.name.includes('Korean'))
+                ) || allVoices.find((v) => v.lang.startsWith('ko'));
+          if (koVoice) utterance.voice = koVoice;
+          utterance.pitch = targetGender === 'male' ? 0.92 : 1.05;
+          utterance.rate = 1.0;
+        } else if (langCode === 'de') {
+          utterance.lang = 'de-DE';
+          const deVoice =
+            targetGender === 'male'
+              ? allVoices.find(
+                  (v) =>
+                    (v.lang === 'de-DE' || v.lang.startsWith('de')) &&
+                    (v.name.includes('Male') ||
+                      v.name.includes('Stefan') ||
+                      v.name.includes('Bernd') ||
+                      v.name.includes('Conrad') ||
+                      v.name.includes('Klaus'))
+                ) || allVoices.find((v) => v.lang.startsWith('de'))
+              : allVoices.find(
+                  (v) =>
+                    (v.lang === 'de-DE' || v.lang.startsWith('de')) &&
+                    (v.name.includes('Female') ||
+                      v.name.includes('Katja') ||
+                      v.name.includes('Hedda') ||
+                      v.name.includes('Marlene') ||
+                      v.name.includes('Natural') ||
+                      v.name.includes('Google') ||
+                      v.name.includes('German'))
+                ) || allVoices.find((v) => v.lang.startsWith('de'));
+          if (deVoice) utterance.voice = deVoice;
+          utterance.pitch = targetGender === 'male' ? 0.90 : 1.05;
+          utterance.rate = 1.0;
+        } else {
+          // English (en-US) Gender-Optimized Voice Selection
+          utterance.lang = 'en-US';
+          let usVoice: SpeechSynthesisVoice | undefined;
+
+          if (targetGender === 'male') {
+            usVoice =
+              allVoices.find(
+                (v) =>
+                  (v.lang === 'en-US' || v.lang.startsWith('en')) &&
+                  (v.name.includes('David') ||
+                    v.name.includes('Guy') ||
+                    v.name.includes('Mark') ||
+                    v.name.includes('George') ||
+                    v.name.includes('Ryan') ||
+                    v.name.includes('James') ||
+                    v.name.includes('Male') ||
+                    v.name.includes('Google US English Male'))
+              ) || allVoices.find((v) => v.lang === 'en-US' || v.lang.startsWith('en'));
+            utterance.pitch = 0.90; // Natural resonant masculine pitch
+            utterance.rate = 1.0;
+          } else {
+            usVoice =
+              allVoices.find(
+                (v) =>
+                  (v.lang === 'en-US' || v.lang.startsWith('en')) &&
+                  (v.name.includes('Jenny') ||
+                    v.name.includes('Samantha') ||
+                    v.name.includes('Aria') ||
+                    v.name.includes('Ava') ||
+                    v.name.includes('Zira') ||
+                    v.name.includes('Female') ||
+                    v.name.includes('Google US English Female') ||
+                    v.name.includes('Google US English'))
+              ) || allVoices.find((v) => v.lang === 'en-US' || v.lang.startsWith('en'));
+            utterance.pitch = 1.08; // Clear natural feminine pitch
+            utterance.rate = 0.98;
+          }
+          if (usVoice) utterance.voice = usVoice;
+        }
+
+        utterance.volume = 1.0;
+        window.speechSynthesis.speak(utterance);
+      } catch (e) {
+        console.warn('Speech synthesis error:', e);
       }
+    },
+    [isTtsEnabled, voicesList, selectedVoiceGender, detectedVoiceGender]
+  );
 
-      utterance.rate = 1.0;
-      utterance.pitch = 1.0;
-      utterance.volume = 1.0;
-      window.speechSynthesis.speak(utterance);
-    } catch (e) {
-      console.warn('Speech synthesis error:', e);
-    }
-  }, [isTtsEnabled, voicesList]);
-
-  // Fallback Translation helper (preserves true text, never invents dummy sentences)
-  const getFallbackTranslation = (text: string, _sourceLang: string, _targetLang: string) => {
-    return text.trim();
-  };
-
-  // Perform translation via Gemini backend API + Fallback handler
+  // Perform translation via Gemini backend API + Universal Engine
   const handleTranslateAndSpeak = async (textToSpeak: string, forcedSpeaker?: UserProfile) => {
     if (!textToSpeak.trim()) return;
 
@@ -221,7 +299,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
     setIsTranslating(true);
 
     let sourceLang = 'ko';
-    let targetLang = 'de';
+    let targetLang = 'en';
 
     if (translationDirection === 'ko_to_de') {
       sourceLang = 'ko';
@@ -252,8 +330,14 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       const data = await res.json();
       let translatedText = data.translatedText;
 
-      if (!data.success || !translatedText) {
-        translatedText = getFallbackTranslation(textToSpeak, sourceLang, targetLang);
+      // Guarantee translation fidelity: if empty or same as input when translating to different language
+      if (
+        !data.success ||
+        !translatedText ||
+        (sourceLang !== targetLang && translatedText.trim() === textToSpeak.trim())
+      ) {
+        const offline = translateOffline(textToSpeak, sourceLang as any, targetLang as any);
+        translatedText = offline.translatedText || textToSpeak;
       }
 
       const newMessage: SubtitleMessage = {
@@ -277,7 +361,9 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       speakText(translatedText, targetLang);
     } catch (err) {
       console.error('Translation error:', err);
-      const fallbackText = getFallbackTranslation(textToSpeak, sourceLang, targetLang);
+      const offline = translateOffline(textToSpeak, sourceLang as any, targetLang as any);
+      const fallbackText = offline.translatedText || textToSpeak;
+
       const newMessage: SubtitleMessage = {
         id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         speakerId: speaker.id,
@@ -288,7 +374,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
         translatedText: fallbackText,
         translatedLang: targetLang as any,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        technicalTerm: 'Wallpen Tech Terminology (Fallback)',
+        technicalTerm: offline.technicalTerm || 'Wallpen Tech Terminology',
       };
       setMessages((prev) => [...prev, newMessage]);
       setCurrentSubtitle(newMessage);
@@ -357,7 +443,14 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
         setLiveInterimSpeech(spokenText);
         setSttStatusMessage(`✅ AI 음성 인식 성공: "${spokenText}"`);
 
-        const translatedText = data.translatedText || getFallbackTranslation(spokenText, sourceLang, targetLang);
+        let translatedText = data.translatedText;
+        if (
+          !translatedText ||
+          (sourceLang !== targetLang && translatedText.trim() === spokenText.trim())
+        ) {
+          const offline = translateOffline(spokenText, sourceLang as any, targetLang as any);
+          translatedText = offline.translatedText || spokenText;
+        }
 
         const newMessage: SubtitleMessage = {
           id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -398,7 +491,9 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
     try {
       setSttErrorNotice(null);
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        setSttErrorNotice('현재 브라우저 환경에서는 직접 마이크 장치 접근이 제한되어 있습니다. [가상 마이크 / 음성 시뮬레이터] 또는 [텍스트 입력]을 사용하실 수 있습니다.');
+        setSttErrorNotice(
+          '현재 브라우저 환경에서는 직접 마이크 장치 접근이 제한되어 있습니다. [가상 마이크 / 음성 시뮬레이터] 또는 [텍스트 입력]을 사용하실 수 있습니다.'
+        );
         setIsVirtualMicActive(true);
         return null;
       }
@@ -416,14 +511,14 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       setIsVirtualMicActive(false);
       setSttStatusMessage('🎤 마이크 연결됨 (말씀하시면 실시간 자막이 생성됩니다)');
 
-      // Setup Web Audio Analyser for visualizer & VAD
+      // Setup Web Audio Analyser for visualizer, VAD & Pitch / Gender estimation
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       if (AudioCtx) {
         const ctx = new AudioCtx();
         audioContextRef.current = ctx;
         const src = ctx.createMediaStreamSource(stream);
         const analyser = ctx.createAnalyser();
-        analyser.fftSize = 256;
+        analyser.fftSize = 512;
         analyser.smoothingTimeConstant = 0.4; // Responsive smoothing
         src.connect(analyser);
         analyserRef.current = analyser;
@@ -443,7 +538,6 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
             sumSquares += normalized * normalized;
           }
           const rms = Math.sqrt(sumSquares / timeData.length);
-          // Scale to intuitive 0 ~ 100% (boost sensitivity for normal human voice)
           const computedVolume = Math.min(100, Math.round(rms * 280));
 
           // 8-Band Frequency Visualizer
@@ -457,37 +551,61 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
           setMicVolume(computedVolume);
           setAudioFrequencies(bands.map((b) => Math.min(100, Math.round((b / 255) * 100))));
 
+          // Voice Fundamental Frequency (F0) & Gender Estimation
+          const SPEECH_THRESHOLD = 8;
+          if (computedVolume >= SPEECH_THRESHOLD && ctx.sampleRate) {
+            let maxEnergy = 0;
+            let peakBin = 0;
+            const nyquist = ctx.sampleRate / 2;
+            const binHz = nyquist / freqData.length;
+            // Vocal range (80Hz to 320Hz)
+            const minBin = Math.max(1, Math.floor(80 / binHz));
+            const maxBin = Math.min(freqData.length - 1, Math.ceil(320 / binHz));
+
+            for (let i = minBin; i <= maxBin; i++) {
+              if (freqData[i] > maxEnergy) {
+                maxEnergy = freqData[i];
+                peakBin = i;
+              }
+            }
+
+            if (maxEnergy > 35) {
+              const estimatedHz = Math.round(peakBin * binHz);
+              if (estimatedHz >= 80 && estimatedHz <= 320) {
+                setEstimatedPitchHz(estimatedHz);
+                // Pitch threshold: <165Hz Male voice, >=165Hz Female voice
+                const detected = estimatedHz < 165 ? 'male' : 'female';
+                setDetectedVoiceGender(detected);
+              }
+            }
+          }
+
           // Voice Activity Detection (VAD) Logic
-          const SPEECH_THRESHOLD = 8; // Responsive threshold for actual human speech
           if (computedVolume >= SPEECH_THRESHOLD && !isMuted && isAutoSttEnabled) {
             if (!isCurrentlySpeakingRef.current) {
-              // Started speaking
               isCurrentlySpeakingRef.current = true;
               setIsSpeakingActive(true);
               speechStartTimestampRef.current = Date.now();
               setSttStatusMessage('🗣️ [음성 인식 중] 말씀하시는 음성을 실시간 수신하고 있습니다...');
 
-              // Clear silence timer if any
               if (silenceTimerRef.current) {
                 clearTimeout(silenceTimerRef.current);
                 silenceTimerRef.current = null;
               }
             } else {
-              // Still speaking, refresh silence countdown
               if (silenceTimerRef.current) {
                 clearTimeout(silenceTimerRef.current);
                 silenceTimerRef.current = null;
               }
             }
           } else if (isCurrentlySpeakingRef.current) {
-            // Volume is below threshold while previously speaking -> Wait for silence gap
             if (!silenceTimerRef.current) {
               silenceTimerRef.current = setTimeout(() => {
                 isCurrentlySpeakingRef.current = false;
                 setIsSpeakingActive(false);
                 setSttStatusMessage('🎙️ [음성 없음 / 대기 중] 마이크가 정상 가동 중입니다.');
                 silenceTimerRef.current = null;
-              }, 700); // 700ms silence gap marks end of speech
+              }, 700);
             }
           }
 
@@ -516,59 +634,6 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       setSttStatusMessage('마이크 권한 대기 중 (가상 음성 모드 지원)');
       return null;
     }
-  };
-
-  // Setup Continuous MediaRecorder for VAD chunk capture
-  const setupContinuousMediaRecorder = (stream: MediaStream) => {
-    try {
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : MediaRecorder.isTypeSupported('audio/webm')
-        ? 'audio/webm'
-        : MediaRecorder.isTypeSupported('audio/mp4')
-        ? 'audio/mp4'
-        : 'audio/wav';
-
-      const recorder = new MediaRecorder(stream, { mimeType });
-      continuousRecorderRef.current = recorder;
-      continuousChunksRef.current = [];
-
-      recorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) {
-          continuousChunksRef.current.push(e.data);
-        }
-      };
-
-      // Start recording in time slices (every 400ms)
-      recorder.start(400);
-    } catch (e) {
-      console.warn('Continuous MediaRecorder setup error:', e);
-    }
-  };
-
-  // Stop & Flush continuous speech chunk to Gemini
-  const stopAndProcessContinuousSpeech = async () => {
-    isCurrentlySpeakingRef.current = false;
-    setIsSpeakingActive(false);
-
-    if (silenceTimerRef.current) {
-      clearTimeout(silenceTimerRef.current);
-      silenceTimerRef.current = null;
-    }
-    if (maxSpeechTimerRef.current) {
-      clearTimeout(maxSpeechTimerRef.current);
-      maxSpeechTimerRef.current = null;
-    }
-
-    if (continuousChunksRef.current.length === 0) return;
-
-    const chunksToProcess = [...continuousChunksRef.current];
-    continuousChunksRef.current = []; // Clear for next sentence
-
-    const mimeType = continuousRecorderRef.current?.mimeType || 'audio/webm';
-    const audioBlob = new Blob(chunksToProcess, { type: mimeType });
-
-    await processAudioChunkWithGemini(audioBlob, false);
   };
 
   // Start parallel Web Speech API for zero-latency interim feedback
@@ -615,7 +680,6 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       };
 
       recognition.onerror = (e: any) => {
-        // Benign error handling for sandbox/iframe
         if (e.error !== 'no-speech' && e.error !== 'aborted') {
           console.warn('Web Speech notice (Gemini Audio VAD remains active):', e.error);
         }
@@ -678,11 +742,9 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       setManualRecordSeconds(1);
       setSttStatusMessage('🎙️ 지금 마이크에 대고 말씀하세요! (녹음 중)');
 
-      // Count up timer
       manualTimerIntervalRef.current = setInterval(() => {
         setManualRecordSeconds((prev) => {
           if (prev >= 6) {
-            // Auto stop at 6 seconds
             if (manualRecorderRef.current && manualRecorderRef.current.state === 'recording') {
               manualRecorderRef.current.stop();
             }
@@ -723,13 +785,12 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       setMicVolume(0);
       setIsSpeakingActive(false);
       handleTranslateAndSpeak(text, speaker);
-    }, 1500);
+    }, 1200);
   };
 
   // Main lifecycle for Audio Stream & Mute toggle
   useEffect(() => {
     if (isMuted) {
-      // Mute audio
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
       if (audioStreamRef.current) {
         audioStreamRef.current.getAudioTracks().forEach((t) => (t.enabled = false));
@@ -746,7 +807,6 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       return;
     }
 
-    // Unmuted -> Ensure Stream & VAD are running if permission granted or attempt smoothly
     if (audioStreamRef.current) {
       audioStreamRef.current.getAudioTracks().forEach((t) => (t.enabled = true));
     } else if (micPermissionState !== 'denied') {
@@ -758,9 +818,80 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
     };
   }, [isMuted, translationDirection]);
 
+  // Webcam stream management (Robust Start/Stop/Restart Lifecycle)
+  const stopWebcam = useCallback(() => {
+    if (videoStreamRef.current) {
+      videoStreamRef.current.getTracks().forEach((track) => {
+        try {
+          track.stop();
+        } catch (e) {}
+      });
+      videoStreamRef.current = null;
+    }
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = null;
+    }
+    setHasWebcamStream(false);
+  }, []);
+
+  const startWebcam = useCallback(async () => {
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setHasWebcamStream(false);
+        return null;
+      }
+
+      // Stop previous stream if any
+      if (videoStreamRef.current) {
+        videoStreamRef.current.getTracks().forEach((t) => {
+          try {
+            t.stop();
+          } catch (e) {}
+        });
+        videoStreamRef.current = null;
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280, max: 1920 },
+          height: { ideal: 720, max: 1080 },
+          facingMode: 'user',
+        },
+      });
+
+      videoStreamRef.current = stream;
+      setHasWebcamStream(true);
+
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+        try {
+          await localVideoRef.current.play();
+        } catch (playErr) {
+          console.log('Local video play notice:', playErr);
+        }
+      }
+
+      return stream;
+    } catch (e) {
+      console.warn('Webcam stream not accessible or permission denied:', e);
+      setHasWebcamStream(false);
+      return null;
+    }
+  }, []);
+
+  // Webcam stream toggle effect
+  useEffect(() => {
+    if (isVideoOff) {
+      stopWebcam();
+    } else {
+      startWebcam();
+    }
+  }, [isVideoOff, startWebcam, stopWebcam]);
+
   // Clean up on unmount
   useEffect(() => {
     return () => {
+      stopWebcam();
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
       if (audioStreamRef.current) {
         audioStreamRef.current.getTracks().forEach((t) => t.stop());
@@ -774,48 +905,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       if (maxSpeechTimerRef.current) clearTimeout(maxSpeechTimerRef.current);
       if (manualTimerIntervalRef.current) clearInterval(manualTimerIntervalRef.current);
     };
-  }, []);
-
-  // WebCam Stream setup
-  useEffect(() => {
-    if (isVideoOff) {
-      setHasWebcamStream(false);
-      return;
-    }
-
-    let streamObj: MediaStream | null = null;
-    let isSubscribed = true;
-
-    async function startWebcam() {
-      try {
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-            audio: false,
-          });
-          if (isSubscribed) {
-            streamObj = stream;
-            setHasWebcamStream(true);
-            if (localVideoRef.current) {
-              localVideoRef.current.srcObject = stream;
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('Webcam stream not accessible or permission denied:', e);
-        if (isSubscribed) setHasWebcamStream(false);
-      }
-    }
-
-    startWebcam();
-
-    return () => {
-      isSubscribed = false;
-      if (streamObj) {
-        streamObj.getTracks().forEach((track) => track.stop());
-      }
-    };
-  }, [isVideoOff]);
+  }, [stopWebcam]);
 
   // Generate AI Executive Meeting Summary via Gemini
   const handleGenerateSummary = async () => {
@@ -874,8 +964,9 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
           </h2>
         </div>
 
-        {/* Translation Language Selector & Controls */}
-        <div className="flex items-center space-x-2 text-xs">
+        {/* Translation Language & Gender Voice Selector Controls */}
+        <div className="flex items-center space-x-2 text-xs flex-wrap gap-y-1.5">
+          {/* Direction */}
           <div className="flex items-center space-x-1.5 bg-slate-800 border border-slate-700 px-2.5 py-1 rounded-lg">
             <Languages className="w-4 h-4 text-amber-400" />
             <span className="text-slate-300 font-medium">통역 방향:</span>
@@ -899,6 +990,27 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
             </select>
           </div>
 
+          {/* Gender Voice Selection */}
+          <div className="flex items-center space-x-1.5 bg-slate-800 border border-slate-700 px-2.5 py-1 rounded-lg">
+            <span className="text-slate-300 font-medium">🗣️ 성별 보이스:</span>
+            <select
+              value={selectedVoiceGender}
+              onChange={(e: any) => setSelectedVoiceGender(e.target.value)}
+              className="bg-transparent text-emerald-300 font-bold focus:outline-none cursor-pointer"
+            >
+              <option value="auto" className="bg-slate-900 text-white">
+                🤖 AI 자동인식 ({detectedVoiceGender === 'male' ? '👨 남성' : '👩 여성'} / {estimatedPitchHz}Hz)
+              </option>
+              <option value="male" className="bg-slate-900 text-white">
+                👨 남성 보이스 (US Male)
+              </option>
+              <option value="female" className="bg-slate-900 text-white">
+                👩 여성 보이스 (US Female)
+              </option>
+            </select>
+          </div>
+
+          {/* TTS On/Off */}
           <button
             onClick={() => setIsTtsEnabled(!isTtsEnabled)}
             title="통역 음성 자동 읽기 On/Off"
@@ -926,7 +1038,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       {/* Main Content Area: Video Streams + Subtitles + Transcript Drawer */}
       <div className="flex-1 flex overflow-hidden relative">
         {/* Left Side: Video Stream Grid & Floating Subtitle Bar */}
-        <div className="flex-1 flex flex-col p-4 space-y-4 overflow-y-auto">
+        <div className="flex-1 flex flex-col p-4 space-y-3 overflow-y-auto">
           {/* Microphone Permission Warning / Setup Banner if needed */}
           {sttErrorNotice && (
             <div className="bg-slate-900/95 border-2 border-amber-500/70 rounded-2xl p-3.5 shadow-xl backdrop-blur-md flex items-center justify-between gap-3 flex-wrap sm:flex-nowrap">
@@ -964,17 +1076,21 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
           )}
 
           {/* Dual Video Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 flex-1 min-h-[300px]">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 flex-1 min-h-[280px]">
             {/* Local Stream (Current User) */}
-            <div className="relative bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col justify-between group min-h-[260px]">
+            <div className="relative bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col justify-between group min-h-[250px]">
               {/* Background Video Stream / Visualizer / WebCam */}
               <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-blue-950/60 overflow-hidden">
-                {/* HTML5 Real WebCam element */}
                 <video
                   ref={localVideoRef}
                   autoPlay
                   playsInline
                   muted
+                  onLoadedMetadata={() => {
+                    if (localVideoRef.current) {
+                      localVideoRef.current.play().catch((e) => console.log('Video metadata play notice:', e));
+                    }
+                  }}
                   className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
                     !isVideoOff && hasWebcamStream ? 'opacity-100 z-0' : 'opacity-0 z-0 pointer-events-none'
                   }`}
@@ -1036,7 +1152,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                 {isSpeakingActive && (
                   <span className="bg-emerald-500 text-slate-950 text-[11px] font-extrabold px-3 py-1 rounded-full flex items-center gap-1.5 animate-pulse shadow-lg ring-2 ring-emerald-300">
                     <span className="w-2 h-2 rounded-full bg-slate-950 animate-ping" />
-                    음성 발화 중...
+                    음성 발화 중 ({estimatedPitchHz}Hz • {detectedVoiceGender === 'male' ? '남성' : '여성'})
                   </span>
                 )}
               </div>
@@ -1054,7 +1170,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
             </div>
 
             {/* Remote Stream (Counterpart) */}
-            <div className="relative bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col justify-between group min-h-[260px]">
+            <div className="relative bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col justify-between group min-h-[250px]">
               <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950/60">
                 {isRemoteVideoOff ? (
                   <div className="flex flex-col items-center justify-center p-6 text-center space-y-3">
@@ -1124,12 +1240,12 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
             </div>
           </div>
 
-          {/* Real-time Voice Recognition & Audio Monitor Ribbon (실시간 음성 인식 및 마이크 모니터) */}
-          <div className="bg-gradient-to-r from-emerald-950/95 via-slate-900/95 to-blue-950/95 border-2 border-emerald-400/90 ring-4 ring-emerald-400/30 shadow-[0_0_30px_rgba(52,211,153,0.3)] backdrop-blur-xl rounded-2xl p-4 transition-all flex flex-col gap-3">
-            <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 border-b border-slate-800/80 pb-3">
+          {/* Real-time Voice Recognition & Audio Monitor Ribbon */}
+          <div className="bg-gradient-to-r from-emerald-950/95 via-slate-900/95 to-blue-950/95 border-2 border-emerald-400/90 ring-4 ring-emerald-400/30 shadow-[0_0_30px_rgba(52,211,153,0.3)] backdrop-blur-xl rounded-2xl p-3.5 transition-all flex flex-col gap-2.5">
+            <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3 border-b border-slate-800/80 pb-2.5">
               {/* Left: Live Visualizer & Dynamic Mic Status */}
               <div className="flex items-center space-x-3.5 flex-1">
-                <div className="p-2.5 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shrink-0 flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shrink-0 flex items-center gap-2">
                   <Mic className={`w-5 h-5 ${isSpeakingActive ? 'text-emerald-400 animate-bounce' : 'text-emerald-400 animate-pulse'}`} />
                   
                   {/* Real-time 8-Band Equalizer Visualizer */}
@@ -1153,12 +1269,12 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                     {isSpeakingActive ? (
                       <span className="bg-emerald-500 text-slate-950 text-[11px] font-black px-2.5 py-0.5 rounded-full flex items-center gap-1.5 shadow ring-2 ring-emerald-300 animate-pulse">
                         <span className="w-2 h-2 rounded-full bg-slate-950 animate-ping" />
-                        🟢 [음성 인식 중]
+                        🟢 [음성 감지] {detectedVoiceGender === 'male' ? '👨 남성' : '👩 여성'} Voice ({estimatedPitchHz}Hz)
                       </span>
                     ) : (
                       <span className="bg-slate-800 text-slate-400 border border-slate-700 text-[11px] font-semibold px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
                         <span className="w-2 h-2 rounded-full bg-slate-500" />
-                        ⚪ [음성 없음 / 대기]
+                        ⚪ [대기 중] 마이크 준비됨
                       </span>
                     )}
 
@@ -1205,7 +1321,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                       <span className="text-slate-300 font-medium text-xs">
                         {isMuted
                           ? '회의 마이크가 꺼져 있습니다. 아래 회의 마이크 버튼을 켜주세요.'
-                          : '마이크가 켜져 있습니다. 말씀하시면 AI가 실시간으로 음성을 인식하고 동시통역 자막을 생성합니다.'}
+                          : '마이크가 켜져 있습니다. 말씀하시면 AI가 실시간으로 음성을 인식하고 영어 동시통역 자막 및 TTS 음성을 출력합니다.'}
                       </span>
                     )}
                   </p>
@@ -1217,7 +1333,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                 {!isRecordingManualAudio ? (
                   <button
                     onClick={handleStartManualRecording}
-                    className="bg-gradient-to-r from-rose-600 via-amber-600 to-orange-600 hover:from-rose-500 hover:to-orange-500 text-white font-extrabold text-xs px-4 py-2.5 rounded-xl shadow-lg border border-amber-300 transition-all flex items-center gap-2"
+                    className="bg-gradient-to-r from-rose-600 via-amber-600 to-orange-600 hover:from-rose-500 hover:to-orange-500 text-white font-extrabold text-xs px-4 py-2 rounded-xl shadow-lg border border-amber-300 transition-all flex items-center gap-2"
                   >
                     <Mic className="w-4 h-4 animate-bounce" />
                     <span>🎙️ 지금 말하기 (클릭 후 발화)</span>
@@ -1225,7 +1341,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                 ) : (
                   <button
                     onClick={handleStopManualRecording}
-                    className="bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs px-4 py-2.5 rounded-xl shadow-lg border-2 border-white transition-all flex items-center gap-2 animate-pulse"
+                    className="bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs px-4 py-2 rounded-xl shadow-lg border-2 border-white transition-all flex items-center gap-2 animate-pulse"
                   >
                     <Square className="w-4 h-4 text-white" />
                     <span>🔴 녹음 완료 및 즉시 통역 ({manualRecordSeconds}초)</span>
@@ -1235,7 +1351,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
             </div>
 
             {/* Engine Status Line */}
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 bg-slate-950/90 p-2.5 rounded-xl border border-slate-800 text-xs">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 bg-slate-950/90 p-2 rounded-xl border border-slate-800 text-xs">
               <div className="text-[11px] font-medium text-emerald-300 flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0" />
                 <span>{sttStatusMessage}</span>
@@ -1264,6 +1380,37 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
             </div>
           </div>
 
+          {/* Quick Voice Translation Preset Buttons (원클릭 음성 발화 & 영어 통역 테스트 바) */}
+          <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5 text-xs text-amber-400 font-bold shrink-0">
+              <Sparkles className="w-4 h-4 text-amber-400" />
+              <span>원클릭 발화 테스트:</span>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => triggerVirtualAudioSpeaking('안녕하세요 테스트를 시작합니다')}
+                className="bg-slate-800 hover:bg-blue-600 text-slate-200 hover:text-white text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-slate-700 hover:border-blue-500 transition-colors flex items-center gap-1.5 shadow-sm"
+              >
+                <Play className="w-3 h-3 text-emerald-400" />
+                <span>"안녕하세요 테스트를 시작합니다" ➔ 🇺🇸 영어 통역</span>
+              </button>
+              <button
+                onClick={() => triggerVirtualAudioSpeaking('노즐 테스트를 진행하겠습니다')}
+                className="bg-slate-800 hover:bg-teal-600 text-slate-200 hover:text-white text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-slate-700 hover:border-teal-500 transition-colors flex items-center gap-1.5 shadow-sm"
+              >
+                <Play className="w-3 h-3 text-teal-400" />
+                <span>"노즐 테스트 진행" ➔ 🇺🇸 영어 통역</span>
+              </button>
+              <button
+                onClick={() => triggerVirtualAudioSpeaking('레이저 거리 센서 보정을 확인해 주세요')}
+                className="bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white text-[11px] font-semibold px-3 py-1.5 rounded-lg border border-slate-700 hover:border-indigo-500 transition-colors flex items-center gap-1.5 shadow-sm"
+              >
+                <Play className="w-3 h-3 text-indigo-400" />
+                <span>"레이저 센서 보정 확인" ➔ 🇺🇸 영어 통역</span>
+              </button>
+            </div>
+          </div>
+
           {/* AI Translation Processing Notification Banner */}
           {isTranslating && (
             <div className="bg-gradient-to-r from-blue-950/95 via-slate-900/95 to-indigo-950/95 border-2 border-blue-400/80 backdrop-blur-xl rounded-2xl p-3 shadow-2xl transition-all flex items-center space-x-3">
@@ -1276,7 +1423,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                     GEMINI AI 실시간 통역 중
                   </span>
                   <span className="text-xs font-bold text-blue-200">
-                    Wallpen 기술 용어 검증 및 독일어/한국어/영어 동시통역을 생성하고 있습니다...
+                    Wallpen 기술 용어 검증 및 미국 영어(US English) 음성 통역을 생성하고 있습니다...
                   </span>
                 </div>
               </div>
@@ -1286,6 +1433,9 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
           {/* Floating Live AI Subtitle Banner (동시통역 최신 자막 레이어) */}
           {currentSubtitle && (() => {
             const info = getSpeakerInfo(currentSubtitle.company, currentSubtitle.speakerName);
+            const origFlag = currentSubtitle.originalLang === 'ko' ? '🇰🇷' : currentSubtitle.originalLang === 'de' ? '🇩🇪' : '🇺🇸';
+            const transFlag = currentSubtitle.translatedLang === 'en' ? '🇺🇸' : currentSubtitle.translatedLang === 'de' ? '🇩🇪' : '🇰🇷';
+
             return (
               <div className={`bg-slate-900/90 border border-slate-700 backdrop-blur-lg rounded-2xl p-4 shadow-2xl transition-all ${info.borderLeftStyle}`}>
                 <div className="flex items-center justify-between mb-2">
@@ -1301,27 +1451,39 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                       </span>
                     </span>
                   </div>
-                  <span className="text-[10px] text-slate-400 font-mono">
-                    {currentSubtitle.timestamp}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => speakText(currentSubtitle.translatedText, currentSubtitle.translatedLang)}
+                      className="bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 transition-colors"
+                      title="통역 음성 다시 듣기"
+                    >
+                      <Volume2 className="w-3 h-3" />
+                      <span>음성 재생</span>
+                    </button>
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      {currentSubtitle.timestamp}
+                    </span>
+                  </div>
                 </div>
 
                 {/* Original & Translated Speech Pairs */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div className="bg-slate-950/60 p-2.5 rounded-xl border border-slate-800">
+                  <div className="bg-slate-950/80 p-3 rounded-xl border border-slate-800">
                     <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-1">
-                      <span>원문 ({currentSubtitle.originalLang.toUpperCase()})</span>
+                      <span>{origFlag} 원문 ({currentSubtitle.originalLang.toUpperCase()})</span>
                     </div>
-                    <p className="text-sm font-medium text-slate-200">
+                    <p className="text-sm font-medium text-slate-100 leading-relaxed">
                       "{currentSubtitle.originalText}"
                     </p>
                   </div>
 
-                  <div className="bg-blue-950/40 p-2.5 rounded-xl border border-blue-800/60">
-                    <div className="text-[10px] font-bold text-amber-400 uppercase tracking-wider mb-1 flex items-center gap-1">
-                      <span>Gemini AI 번역 ({currentSubtitle.translatedLang.toUpperCase()})</span>
+                  <div className="bg-amber-950/40 p-3 rounded-xl border-2 border-amber-500/50 shadow-inner">
+                    <div className="text-[10px] font-bold text-amber-400 uppercase tracking-wider mb-1 flex items-center justify-between">
+                      <span className="flex items-center gap-1">
+                        <span>{transFlag} AI 실시간 통역 ({currentSubtitle.translatedLang.toUpperCase()})</span>
+                      </span>
                     </div>
-                    <p className="text-sm font-bold text-amber-200">
+                    <p className="text-sm font-bold text-amber-200 leading-relaxed">
                       "{currentSubtitle.translatedText}"
                     </p>
                   </div>
@@ -1347,7 +1509,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                 <FileText className="w-4 h-4 text-blue-400" />
                 <span className="font-bold text-xs text-white">실시간 통역 회의록</span>
                 <span className="bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] px-2 py-0.5 rounded-full font-mono font-semibold">
-                  최신순 상단 누적 • {messages.length}건
+                  최신순 • {messages.length}건
                 </span>
               </div>
               <button
@@ -1376,11 +1538,14 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                 [...messages].slice().reverse().map((m, idx) => {
                   const isLatest = idx === 0;
                   const info = getSpeakerInfo(m.company, m.speakerName);
+                  const isKorean = m.originalLang === 'ko';
+                  const origFlag = isKorean ? '🇰🇷' : m.originalLang === 'de' ? '🇩🇪' : '🇺🇸';
+                  const transFlag = m.translatedLang === 'en' ? '🇺🇸' : m.translatedLang === 'de' ? '🇩🇪' : '🇰🇷';
 
                   return (
                     <div
                       key={m.id}
-                      className={`p-3 rounded-xl text-xs space-y-1.5 border transition-all ${
+                      className={`p-3 rounded-xl text-xs space-y-2 border transition-all ${
                         isLatest
                           ? `${info.boxStyle} ring-2 ring-amber-400/50 shadow-xl`
                           : info.boxStyle
@@ -1415,11 +1580,38 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                         </div>
                       </div>
 
-                      <p className="text-slate-200 font-medium pl-0.5">{m.originalText}</p>
-                      <div className="pt-1.5 border-t border-slate-700/50 text-amber-300 font-semibold flex items-start gap-1 pl-0.5">
-                        <Globe2 className="w-3 h-3 shrink-0 mt-0.5 text-amber-400" />
-                        <span>{m.translatedText}</span>
+                      {/* Original Speech Box */}
+                      <div className="bg-slate-950/70 p-2 rounded-lg border border-slate-800 space-y-0.5">
+                        <div className="text-[9px] font-bold text-slate-400 flex items-center gap-1">
+                          <span>{origFlag} 원문 ({m.originalLang.toUpperCase()})</span>
+                        </div>
+                        <p className="text-slate-200 font-medium leading-relaxed">{m.originalText}</p>
                       </div>
+
+                      {/* Translated Speech Box */}
+                      <div className="bg-amber-950/30 p-2 rounded-lg border border-amber-500/30 space-y-0.5">
+                        <div className="text-[9px] font-bold text-amber-400 flex items-center justify-between">
+                          <span className="flex items-center gap-1">
+                            <span>{transFlag} 실시간 통역 ({m.translatedLang.toUpperCase()})</span>
+                          </span>
+                          <button
+                            onClick={() => speakText(m.translatedText, m.translatedLang)}
+                            className="text-amber-300 hover:text-white flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/30 transition-colors"
+                            title="통역 음성 다시 듣기"
+                          >
+                            <Volume2 className="w-3 h-3" />
+                            <span>다시듣기</span>
+                          </button>
+                        </div>
+                        <p className="text-amber-200 font-bold leading-relaxed">{m.translatedText}</p>
+                      </div>
+
+                      {m.technicalTerm && (
+                        <div className="text-[9px] text-slate-400 flex items-center gap-1 pt-0.5">
+                          <Wrench className="w-2.5 h-2.5 text-blue-400 shrink-0" />
+                          <span className="truncate">{m.technicalTerm}</span>
+                        </div>
+                      )}
                     </div>
                   );
                 })
@@ -1504,7 +1696,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
             onKeyDown={(e) => e.key === 'Enter' && handleTranslateAndSpeak(inputManualText)}
             placeholder={
               isEurotechUser
-                ? '질의 또는 공유할 내용을 입력 후 전송 (예: 본사 수주 및 프린트헤드 점검 문의)...'
+                ? '질의 또는 공유할 내용을 입력 후 전송 (예: 안녕하세요 테스트를 시작합니다)...'
                 : 'Enter query or message to translate...'
             }
             className="flex-1 bg-transparent border-0 text-xs text-white placeholder-slate-500 focus:outline-none px-2"
@@ -1570,17 +1762,33 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                     <span className="font-mono text-emerald-300 font-bold">{micVolume}%</span>
                   </div>
                 </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-300">감지된 음성 주파수 & 성별:</span>
+                  <span className="font-bold text-amber-300">
+                    {estimatedPitchHz}Hz ({detectedVoiceGender === 'male' ? '👨 남성' : '👩 여성'} Voice)
+                  </span>
+                </div>
               </div>
 
               {/* Troubleshooting Tips */}
               <div className="space-y-1.5 text-slate-300">
                 <h4 className="font-bold text-amber-300 flex items-center gap-1">
-                  <Sparkles className="w-3.5 h-3.5" /> 음성이 인식되지 않을 때 해결 방법:
+                  <Sparkles className="w-3.5 h-3.5" /> 음성/카메라 진단 및 가이드:
                 </h4>
                 <ul className="list-disc list-inside space-y-1 pl-1 text-slate-300">
-                  <li>브라우저 상단 주소창 왼쪽의 <strong>자물쇠 🔒</strong> 또는 <strong>마이크 아이콘</strong>을 클릭하여 <strong>마이크 허용</strong>을 선택해주세요.</li>
-                  <li>주변 소음이 있거나 인식이 어려울 때는 상단의 <strong>[🎙️ 지금 말하기 (클릭 후 발화)]</strong> 버튼을 클릭하여 직접 녹음 후 통역할 수 있습니다.</li>
-                  <li>화면 하단의 <strong>원클릭 음성 발화 테스트</strong> 버튼으로 즉시 AI 통역 기능을 테스트할 수 있습니다.</li>
+                  <li>
+                    <strong>새로고침 시 권한 팝업이 뜨지 않는 이유</strong>: Chrome/Safari 등 브라우저는 최초에 <strong>"허용"</strong>된 사이트의 권한을 브라우저에 저장(기억)하므로, 새로고침 시 팝업 없이 즉시 연결됩니다.
+                  </li>
+                  <li>
+                    권한을 재설정하거나 차단 해제하려면 브라우저 상단 주소창 왼쪽의 <strong>자물쇠 🔒</strong> 또는 <strong>카메라/마이크 아이콘</strong>을 클릭하여 <strong>허용</strong>으로 변경해주세요.
+                  </li>
+                  <li>
+                    주변 소음이 있거나 인식이 어려울 때는 상단의 <strong>[🎙️ 지금 말하기 (클릭 후 발화)]</strong> 버튼을 클릭하여 직접 녹음 후 통역할 수 있습니다.
+                  </li>
+                  <li>
+                    화면 상단의 <strong>원클릭 발화 테스트</strong> 버튼으로 즉시 AI 통역 기능을 테스트할 수 있습니다.
+                  </li>
                 </ul>
               </div>
             </div>
