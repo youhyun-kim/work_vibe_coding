@@ -1,0 +1,6 @@
+{
+  "name": "Eurotech-Wallpen Connect",
+  "description": "한국 유로테크(Wallpen 한국 총판)와 독일 Wallpen 본사 간 AI 동시통역 화상회의 및 기술지원 애플리케이션",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
