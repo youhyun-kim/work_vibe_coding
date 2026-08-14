@@ -1,5 +1,10 @@
 import { UserProfile, TechTicket, MeetingRecord, WallpenManualItem } from '../types';
 
+export const KOREA_FLAG_AVATAR =
+  'https://upload.wikimedia.org/wikipedia/commons/thumb/0/09/Flag_of_South_Korea.svg/512px-Flag_of_South_Korea.svg.png';
+export const GERMANY_FLAG_AVATAR =
+  'https://upload.wikimedia.org/wikipedia/en/thumb/b/ba/Flag_of_Germany.svg/512px-Flag_of_Germany.svg.png';
+
 export const MOCK_USERS: UserProfile[] = [
   {
     id: 'usr_kr_1',
@@ -11,7 +16,7 @@ export const MOCK_USERS: UserProfile[] = [
     role: 'eurotech_manager',
     roleTitle: 'CEO / Representative Director',
     roleTitleKr: '대표이사 / 유로테크 대표',
-    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=256&q=80',
+    avatar: KOREA_FLAG_AVATAR,
     department: '유로테크 경영 및 총괄',
     preferredLang: 'ko',
     location: '서울 성동구 성수동 (Korea HQ)',
@@ -28,7 +33,7 @@ export const MOCK_USERS: UserProfile[] = [
     role: 'eurotech_engineer',
     roleTitle: 'Senior Technical Sales Manager',
     roleTitleKr: '기술영업 과장 / 현장지원 총괄',
-    avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=256&q=80',
+    avatar: KOREA_FLAG_AVATAR,
     department: '기술영업부',
     preferredLang: 'ko',
     location: '서울 성동구 성수동 (Korea HQ)',
@@ -45,7 +50,7 @@ export const MOCK_USERS: UserProfile[] = [
     role: 'wallpen_director',
     roleTitle: 'VP of International Sales & Tech Support',
     roleTitleKr: '해외영업 및 해외 기술총괄 이사',
-    avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=256&q=80',
+    avatar: GERMANY_FLAG_AVATAR,
     department: 'Global Partner Success HQ',
     preferredLang: 'de',
     location: 'Herford, Germany (HQ)',
@@ -62,7 +67,7 @@ export const MOCK_USERS: UserProfile[] = [
     role: 'wallpen_tech_lead',
     roleTitle: 'Chief Hardware & Calibration Lead',
     roleTitleKr: '프린터 하드웨어 & 센서 보정 수석 개발자',
-    avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=256&q=80',
+    avatar: GERMANY_FLAG_AVATAR,
     department: 'R&D & Engineering HQ',
     preferredLang: 'en',
     location: 'Herford, Germany (HQ)',

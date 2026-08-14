@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { UserProfile, SubtitleMessage, CompanyType } from '../types';
-import { MOCK_USERS, QUICK_GLOSSARY_PHRASES } from '../data/mockData';
+import { MOCK_USERS, QUICK_GLOSSARY_PHRASES, KOREA_FLAG_AVATAR, GERMANY_FLAG_AVATAR } from '../data/mockData';
 import { getSpeakerInfo } from '../utils/speakerUtils';
 import { translateOffline } from '../utils/translationEngine';
 import { WhiteboardModal } from './WhiteboardModal';
@@ -675,22 +675,27 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
     }
   }, [micSensitivity]);
 
-  // Start parallel Web Speech API for zero-latency interim feedback
+  // Start parallel Web Speech API for continuous zero-latency speech-to-text
   const startWebSpeechRecognition = useCallback(() => {
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
     if (!SpeechRecognition || isMuted || !isAutoSttEnabled) return;
 
-    if (isRecognitionRunningRef.current && webSpeechRecognitionRef.current) {
+    if (isRecognitionRunningRef.current) {
       return;
     }
 
     try {
       if (webSpeechRecognitionRef.current) {
         try {
+          webSpeechRecognitionRef.current.onstart = null;
+          webSpeechRecognitionRef.current.onresult = null;
+          webSpeechRecognitionRef.current.onerror = null;
+          webSpeechRecognitionRef.current.onend = null;
           webSpeechRecognitionRef.current.abort();
         } catch (e) {}
+        webSpeechRecognitionRef.current = null;
       }
 
       const recognition = new SpeechRecognition();
@@ -727,7 +732,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
             pendingInterimRef.current = '';
             handleTranslateAndSpeak(final.trim());
           } else {
-            // Auto-commit interim buffer after 750ms of silence so no phrase is dropped
+            // Auto-commit interim buffer after 650ms of silence so phrases are never dropped
             if (interimCommitTimerRef.current) clearTimeout(interimCommitTimerRef.current);
             interimCommitTimerRef.current = setTimeout(() => {
               if (pendingInterimRef.current && pendingInterimRef.current.trim()) {
@@ -735,7 +740,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                 pendingInterimRef.current = '';
                 handleTranslateAndSpeak(committed);
               }
-            }, 750);
+            }, 650);
           }
         }
       };
@@ -749,7 +754,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
           if (restartRecognitionTimerRef.current) clearTimeout(restartRecognitionTimerRef.current);
           restartRecognitionTimerRef.current = setTimeout(() => {
             startWebSpeechRecognition();
-          }, 250);
+          }, 150);
         }
       };
 
@@ -761,22 +766,29 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
           pendingInterimRef.current = '';
           handleTranslateAndSpeak(committed);
         }
+        // Continuous auto-restart: Web Speech ends after each sentence or silence, restart immediately
         if (!isMuted && isAutoSttEnabled) {
           if (restartRecognitionTimerRef.current) clearTimeout(restartRecognitionTimerRef.current);
           restartRecognitionTimerRef.current = setTimeout(() => {
             startWebSpeechRecognition();
-          }, 100);
+          }, 50);
         }
       };
 
       recognition.start();
     } catch (e) {
       isRecognitionRunningRef.current = false;
-      console.warn('Web Speech init notice:', e);
+      console.warn('Web Speech start notice:', e);
+      if (!isMuted && isAutoSttEnabled) {
+        if (restartRecognitionTimerRef.current) clearTimeout(restartRecognitionTimerRef.current);
+        restartRecognitionTimerRef.current = setTimeout(() => {
+          startWebSpeechRecognition();
+        }, 300);
+      }
     }
   }, [isMuted, isAutoSttEnabled, translationDirection, handleTranslateAndSpeak]);
 
-  // Speech Recognition continuous watchdog
+  // Speech Recognition continuous watchdog (reconnects if disconnected)
   useEffect(() => {
     if (isMuted || !isAutoSttEnabled) {
       if (webSpeechRecognitionRef.current) {
@@ -794,7 +806,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       if (!isMuted && isAutoSttEnabled && !isRecognitionRunningRef.current) {
         startWebSpeechRecognition();
       }
-    }, 2000);
+    }, 1000);
 
     return () => {
       clearInterval(watchdog);
@@ -1011,14 +1023,16 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
   }, [stopWebcam]);
 
   // Generate AI Executive Meeting Summary via Gemini
-  const handleGenerateSummary = async () => {
+  const handleGenerateSummary = async (customTranscript?: SubtitleMessage[]): Promise<any> => {
     setIsSummarizing(true);
+    const transcriptToSummarize = customTranscript || messages;
+
     try {
       const res = await fetch('/api/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          transcript: messages.map((m) => ({
+          transcript: transcriptToSummarize.map((m) => ({
             speaker: m.speakerName,
             company: m.company === 'eurotech_korea' ? '유로테크' : 'Wallpen Germany',
             text: m.originalText,
@@ -1031,17 +1045,75 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       });
 
       const data = await res.json();
-      if (data.success) {
-        setAiSummaryReport(data.report);
+      const report = data.success ? data.report : null;
+      if (report) {
+        setAiSummaryReport(report);
         setShowSummaryModal(true);
         if (onSaveMeetingRecord) {
-          onSaveMeetingRecord(messages, data.report);
+          onSaveMeetingRecord(transcriptToSummarize, report);
         }
+        return report;
       }
     } catch (err) {
-      console.error(err);
+      console.error('Summary error:', err);
     } finally {
       setIsSummarizing(false);
+    }
+    return null;
+  };
+
+  // End Call handler with automatic summary & save guarantee
+  const handleEndCallWithAutoSummary = async () => {
+    // If there are recorded messages, ensure summary and report are saved automatically
+    if (messages.length > 0) {
+      try {
+        let report = aiSummaryReport;
+        if (!report) {
+          // Quick generate report
+          const res = await fetch('/api/summarize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              transcript: messages.map((m) => ({
+                speaker: m.speakerName,
+                company: m.company === 'eurotech_korea' ? '유로테크' : 'Wallpen Germany',
+                text: m.originalText,
+                translatedText: m.translatedText,
+                timestamp: m.timestamp,
+              })),
+              meetingTitle: '유로테크(Korea) - Wallpen Germany HQ 화상회의',
+              participants: [currentUser.name, remoteUser.name],
+            }),
+          });
+          const data = await res.json();
+          report = data.report;
+        }
+
+        if (onSaveMeetingRecord && report) {
+          onSaveMeetingRecord(messages, report);
+        }
+      } catch (err) {
+        console.warn('Auto summary on end notice:', err);
+      }
+    } else if (onSaveMeetingRecord) {
+      // Even if no speech was spoken, create initial meeting session
+      const fallbackReport = {
+        title: '유로테크(Korea) - Wallpen Germany HQ 화상회의',
+        summaryKo: '유로테크와 Wallpen 독일 본사 간의 화상회의 세션이 완료되었습니다.',
+        summaryEn: 'Executive Technical Meeting Record between Eurotech Korea and Wallpen Germany HQ completed.',
+        keyTopics: [
+          { topicKo: '화상회의 세션 진행', topicEn: 'Video Conference Session', details: '유로테크와 Wallpen 본사 간 장비 및 발주 화상회의' },
+        ],
+        technicalDecisions: ['Wallpen E2 장비 상태 및 기술 지원 세션 확인'],
+        actionItems: [
+          { assignee: '유로테크 / Wallpen', task: '회의 후속 조치 및 안건 검토', dueDate: '금주 중' },
+        ],
+      };
+      onSaveMeetingRecord([], fallbackReport);
+    }
+
+    if (onEndCall) {
+      onEndCall();
     }
   };
 
@@ -1221,14 +1293,12 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
 
                 {isVideoOff ? (
                   <div className="relative z-10 flex flex-col items-center justify-center p-6 text-center space-y-3">
-                    <div
-                      className={`w-20 h-20 sm:w-24 sm:h-24 rounded-full flex items-center justify-center border-2 shadow-2xl ${
-                        currentUser.company === 'eurotech_korea'
-                          ? 'bg-blue-950/90 border-blue-500/60 text-blue-400 ring-4 ring-blue-500/20'
-                          : 'bg-amber-950/90 border-amber-500/60 text-amber-400 ring-4 ring-amber-500/20'
-                      }`}
-                    >
-                      <User className="w-10 h-10 sm:w-12 sm:h-12" />
+                    <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full overflow-hidden flex items-center justify-center border-2 border-blue-500 shadow-2xl ring-4 ring-blue-500/30 bg-white">
+                      <img
+                        src={currentUser.company === 'eurotech_korea' ? KOREA_FLAG_AVATAR : GERMANY_FLAG_AVATAR}
+                        alt={currentUser.name}
+                        className="w-full h-full object-cover"
+                      />
                     </div>
                     <div className="space-y-1">
                       <div className="flex items-center justify-center gap-1.5">
@@ -1244,8 +1314,12 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                 ) : !hasWebcamStream ? (
                   <div className="relative z-10 w-full h-full flex flex-col items-center justify-center p-6 text-center">
                     <div className="relative mb-3">
-                      <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-gradient-to-tr from-blue-600 via-indigo-600 to-blue-500 flex items-center justify-center text-white shadow-2xl ring-4 ring-blue-400/30">
-                        <User className="w-10 h-10 sm:w-12 sm:h-12" />
+                      <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full overflow-hidden bg-white flex items-center justify-center text-white shadow-2xl ring-4 ring-blue-400/40 border-2 border-blue-400">
+                        <img
+                          src={currentUser.company === 'eurotech_korea' ? KOREA_FLAG_AVATAR : GERMANY_FLAG_AVATAR}
+                          alt={currentUser.name}
+                          className="w-full h-full object-cover"
+                        />
                       </div>
                       <span className="absolute bottom-0 right-0 w-5 h-5 rounded-full bg-emerald-500 border-2 border-slate-900 flex items-center justify-center">
                         <span className="w-2 h-2 rounded-full bg-white animate-ping"></span>
@@ -1297,14 +1371,12 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
               <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950/60">
                 {isRemoteVideoOff ? (
                   <div className="flex flex-col items-center justify-center p-6 text-center space-y-3">
-                    <div
-                      className={`w-20 h-20 sm:w-24 sm:h-24 rounded-full flex items-center justify-center border-2 shadow-2xl ${
-                        remoteUser.company === 'eurotech_korea'
-                          ? 'bg-blue-950/90 border-blue-500/60 text-blue-400 ring-4 ring-blue-500/20'
-                          : 'bg-indigo-950/90 border-indigo-500/60 text-indigo-400 ring-4 ring-indigo-500/20'
-                      }`}
-                    >
-                      <User className="w-10 h-10 sm:w-12 sm:h-12" />
+                    <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full overflow-hidden flex items-center justify-center border-2 border-amber-500 shadow-2xl ring-4 ring-amber-500/30 bg-slate-950">
+                      <img
+                        src={remoteUser.company === 'eurotech_korea' ? KOREA_FLAG_AVATAR : GERMANY_FLAG_AVATAR}
+                        alt={remoteUser.name}
+                        className="w-full h-full object-cover"
+                      />
                     </div>
                     <div className="space-y-1">
                       <div className="flex items-center justify-center gap-1.5">
@@ -1320,8 +1392,12 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                 ) : (
                   <div className="relative w-full h-full flex flex-col items-center justify-center p-6 text-center">
                     <div className="relative mb-3">
-                      <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full bg-gradient-to-tr from-indigo-600 via-purple-600 to-indigo-500 flex items-center justify-center text-white shadow-2xl ring-4 ring-indigo-400/30">
-                        <User className="w-10 h-10 sm:w-12 sm:h-12" />
+                      <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-full overflow-hidden bg-slate-950 flex items-center justify-center text-white shadow-2xl ring-4 ring-amber-400/40 border-2 border-amber-400">
+                        <img
+                          src={remoteUser.company === 'eurotech_korea' ? KOREA_FLAG_AVATAR : GERMANY_FLAG_AVATAR}
+                          alt={remoteUser.name}
+                          className="w-full h-full object-cover"
+                        />
                       </div>
                       <span className="absolute bottom-0 right-0 w-5 h-5 rounded-full bg-emerald-500 border-2 border-slate-900 flex items-center justify-center">
                         <span className="w-2 h-2 rounded-full bg-white animate-ping"></span>
@@ -1711,7 +1787,13 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                     >
                       <div className="flex items-center justify-between text-[10px] text-slate-400">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="text-sm leading-none">{info.flag}</span>
+                          <div className="w-4 h-4 rounded-full overflow-hidden ring-1 ring-slate-600 shrink-0 bg-white flex items-center justify-center shadow-sm">
+                            <img
+                              src={m.company === 'eurotech_korea' ? KOREA_FLAG_AVATAR : GERMANY_FLAG_AVATAR}
+                              alt={m.speakerName}
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
                           <span className={`font-bold ${info.nameColor}`}>{m.speakerName}</span>
                           <span className={`text-[9px] px-1.5 py-0.2 rounded border font-semibold ${info.badgeStyle}`}>
                             {info.companyLabel}
@@ -1870,13 +1952,13 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
           </button>
         </div>
 
-        {/* Right: End Call */}
+        {/* Right: End Call with Auto-Summary */}
         <button
-          onClick={onEndCall}
+          onClick={handleEndCallWithAutoSummary}
           className="bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs px-4 py-2.5 rounded-xl shadow-md flex items-center space-x-1.5 transition-colors shrink-0"
         >
           <PhoneOff className="w-4 h-4" />
-          <span>회의 종료</span>
+          <span>회의 종료 & 요약 저장</span>
         </button>
       </div>
 
