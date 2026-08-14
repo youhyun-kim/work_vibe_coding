@@ -123,6 +123,24 @@ const EXACT_PHRASES: Record<string, { en: string; de: string; ko: string; term?:
     ko: "성수동 현장에 Wallpen E2 장비 설치가 완료되었습니다.",
     term: "Wallpen E2 Field Installation",
   },
+  "이게 비즈니스 영어가 맞나": {
+    en: "Is this appropriate business English?",
+    de: "Ist das angemessenes Geschäftsenglisch?",
+    ko: "이게 비즈니스 영어가 맞나요?",
+    term: "Business English Inquiry",
+  },
+  "이게 비즈니스 영어가 맞나요": {
+    en: "Is this appropriate business English?",
+    de: "Ist das angemessenes Geschäftsenglisch?",
+    ko: "이게 비즈니스 영어가 맞나요?",
+    term: "Business English Inquiry",
+  },
+  "비즈니스 영어로 어떻게 말하나요": {
+    en: "How do you say this in professional business English?",
+    de: "Wie sagt man das im geschäftlichen Englisch?",
+    ko: "비즈니스 영어로 어떻게 말하나요?",
+    term: "Business Phrasing Inquiry",
+  },
 };
 
 /**

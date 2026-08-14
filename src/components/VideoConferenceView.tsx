@@ -118,8 +118,11 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
   const manualChunksRef = useRef<Blob[]>([]);
   const manualTimerIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Web Speech API fallback ref
+  // Web Speech API fallback ref & continuous lifecycle
   const webSpeechRecognitionRef = useRef<any>(null);
+  const isRecognitionRunningRef = useRef<boolean>(false);
+  const restartRecognitionTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastProcessedTextRef = useRef<{ text: string; time: number }>({ text: '', time: 0 });
 
   // Scroll transcript to top on new message
   useEffect(() => {
@@ -291,9 +294,20 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
     [isTtsEnabled, voicesList, selectedVoiceGender, detectedVoiceGender]
   );
 
-  // Perform translation via Gemini backend API + Universal Engine
+  // Perform translation via Gemini backend API + Auxiliary + Universal Engine
   const handleTranslateAndSpeak = async (textToSpeak: string, forcedSpeaker?: UserProfile) => {
-    if (!textToSpeak.trim()) return;
+    const trimmed = textToSpeak.trim();
+    if (!trimmed) return;
+
+    // Deduplication check (prevent duplicate triggers within 1200ms)
+    const now = Date.now();
+    if (
+      trimmed === lastProcessedTextRef.current.text &&
+      now - lastProcessedTextRef.current.time < 1200
+    ) {
+      return;
+    }
+    lastProcessedTextRef.current = { text: trimmed, time: now };
 
     const speaker = forcedSpeaker || currentUser;
     setIsTranslating(true);
@@ -320,7 +334,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          text: textToSpeak,
+          text: trimmed,
           sourceLang,
           targetLang,
           context: 'Wallpen Wall Printer Tech & Order Conference (Eurotech Korea & Wallpen Germany HQ)',
@@ -330,14 +344,16 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       const data = await res.json();
       let translatedText = data.translatedText;
 
-      // Guarantee translation fidelity: if empty or same as input when translating to different language
+      // Guarantee translation fidelity: if empty, same as input, or still contains Korean characters when translating to English
+      const hasKorean = /[\uAC00-\uD7AF]/.test(translatedText || '');
       if (
         !data.success ||
         !translatedText ||
-        (sourceLang !== targetLang && translatedText.trim() === textToSpeak.trim())
+        (targetLang === 'en' && hasKorean) ||
+        (sourceLang !== targetLang && translatedText.trim() === trimmed)
       ) {
-        const offline = translateOffline(textToSpeak, sourceLang as any, targetLang as any);
-        translatedText = offline.translatedText || textToSpeak;
+        const offline = translateOffline(trimmed, sourceLang as any, targetLang as any);
+        translatedText = offline.translatedText || trimmed;
       }
 
       const newMessage: SubtitleMessage = {
@@ -345,7 +361,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
         speakerId: speaker.id,
         speakerName: speaker.name,
         company: speaker.company,
-        originalText: textToSpeak,
+        originalText: trimmed,
         originalLang: sourceLang as any,
         translatedText,
         translatedLang: targetLang as any,
@@ -361,15 +377,15 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       speakText(translatedText, targetLang);
     } catch (err) {
       console.error('Translation error:', err);
-      const offline = translateOffline(textToSpeak, sourceLang as any, targetLang as any);
-      const fallbackText = offline.translatedText || textToSpeak;
+      const offline = translateOffline(trimmed, sourceLang as any, targetLang as any);
+      const fallbackText = offline.translatedText || trimmed;
 
       const newMessage: SubtitleMessage = {
         id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
         speakerId: speaker.id,
         speakerName: speaker.name,
         company: speaker.company,
-        originalText: textToSpeak,
+        originalText: trimmed,
         originalLang: sourceLang as any,
         translatedText: fallbackText,
         translatedLang: targetLang as any,
@@ -637,16 +653,20 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
   };
 
   // Start parallel Web Speech API for zero-latency interim feedback
-  const startWebSpeechRecognition = () => {
+  const startWebSpeechRecognition = useCallback(() => {
     const SpeechRecognition =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
-    if (!SpeechRecognition) return;
+    if (!SpeechRecognition || isMuted || !isAutoSttEnabled) return;
+
+    if (isRecognitionRunningRef.current && webSpeechRecognitionRef.current) {
+      return;
+    }
 
     try {
       if (webSpeechRecognitionRef.current) {
         try {
-          webSpeechRecognitionRef.current.stop();
+          webSpeechRecognitionRef.current.abort();
         } catch (e) {}
       }
 
@@ -660,6 +680,10 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
         ? 'de-DE'
         : 'en-US';
 
+      recognition.onstart = () => {
+        isRecognitionRunningRef.current = true;
+      };
+
       recognition.onresult = (event: any) => {
         let interim = '';
         let final = '';
@@ -670,7 +694,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
             interim += event.results[i][0].transcript;
           }
         }
-        const recognized = final || interim;
+        const recognized = (final || interim).trim();
         if (recognized) {
           setLiveInterimSpeech(recognized);
           if (final && final.trim()) {
@@ -680,24 +704,60 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       };
 
       recognition.onerror = (e: any) => {
+        isRecognitionRunningRef.current = false;
         if (e.error !== 'no-speech' && e.error !== 'aborted') {
-          console.warn('Web Speech notice (Gemini Audio VAD remains active):', e.error);
+          console.warn('Web Speech notice:', e.error);
+        }
+        if (e.error !== 'not-allowed' && !isMuted && isAutoSttEnabled) {
+          if (restartRecognitionTimerRef.current) clearTimeout(restartRecognitionTimerRef.current);
+          restartRecognitionTimerRef.current = setTimeout(() => {
+            startWebSpeechRecognition();
+          }, 300);
         }
       };
 
       recognition.onend = () => {
-        if (!isMuted && webSpeechRecognitionRef.current) {
-          try {
-            recognition.start();
-          } catch (e) {}
+        isRecognitionRunningRef.current = false;
+        if (!isMuted && isAutoSttEnabled) {
+          if (restartRecognitionTimerRef.current) clearTimeout(restartRecognitionTimerRef.current);
+          restartRecognitionTimerRef.current = setTimeout(() => {
+            startWebSpeechRecognition();
+          }, 120);
         }
       };
 
       recognition.start();
     } catch (e) {
-      console.warn('Web Speech init skipped:', e);
+      isRecognitionRunningRef.current = false;
+      console.warn('Web Speech init notice:', e);
     }
-  };
+  }, [isMuted, isAutoSttEnabled, translationDirection, handleTranslateAndSpeak]);
+
+  // Speech Recognition continuous watchdog
+  useEffect(() => {
+    if (isMuted || !isAutoSttEnabled) {
+      if (webSpeechRecognitionRef.current) {
+        try {
+          webSpeechRecognitionRef.current.stop();
+        } catch (e) {}
+        isRecognitionRunningRef.current = false;
+      }
+      return;
+    }
+
+    startWebSpeechRecognition();
+
+    const watchdog = setInterval(() => {
+      if (!isMuted && isAutoSttEnabled && !isRecognitionRunningRef.current) {
+        startWebSpeechRecognition();
+      }
+    }, 2000);
+
+    return () => {
+      clearInterval(watchdog);
+      if (restartRecognitionTimerRef.current) clearTimeout(restartRecognitionTimerRef.current);
+    };
+  }, [isMuted, isAutoSttEnabled, startWebSpeechRecognition]);
 
   // Handle Manual Push-to-Talk / Click-to-Record (100% Reliable Trigger)
   const handleStartManualRecording = async () => {

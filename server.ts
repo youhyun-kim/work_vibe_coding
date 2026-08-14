@@ -58,6 +58,12 @@ app.post("/api/translate", async (req, res) => {
       return res.status(400).json({ error: "Text is required" });
     }
 
+    const cleanText = text.trim();
+    const isTargetEn = targetLang === "en";
+    const isTargetDe = targetLang === "de";
+    const isTargetKo = targetLang === "ko";
+    const hasKoreanChars = /[\uAC00-\uD7AF\u1100-\u11FF]/.test(cleanText);
+
     const systemInstruction = `
 You are a top-tier simultaneous interpreter and technical translation expert for high-end industrial machinery, specifically specializing in:
 - Company A: Eurotech Korea (유로테크, official Korean distributor / 총판)
@@ -66,17 +72,17 @@ You are a top-tier simultaneous interpreter and technical translation expert for
 
 Your task:
 1. Accurately translate the input text between Korean, German, and American English.
-2. When target language is English ("en"), ALWAYS produce natural, professional, native American English (en-US) suitable for US technical executives and engineers. Use natural American phrasing and terminology (e.g., 'printhead', 'on-site testing', 'calibration', 'distributor').
+2. When target language is English ("en"), ALWAYS produce natural, professional, native American English (en-US) suitable for US technical executives and engineers.
 3. If source text is Korean, translate to ${targetLang === "de" ? "German" : "native American English (en-US)"}.
 4. If source text is English or German, translate to natural Korean.
-5. Ensure domain-specific vertical wall printing terminology is translated precisely (e.g., '노즐' -> 'Printhead nozzle', 'UV 경화' -> 'UV Curing', '레일 조립' -> 'Track assembly', '벽면 센서' -> 'Surface laser sensor', '출력 속도' -> 'Printing speed').
-6. Provide a natural spoken translation suitable for video conference live speech.
+5. Ensure domain-specific vertical wall printing terminology is translated precisely.
+6. NEVER return the untranslated original text when translating across different languages.
 
 Output JSON format ONLY:
 {
-  "translatedText": "the direct translation string in native American English or German or Korean",
+  "translatedText": "the direct translation string in native target language",
   "detectedSourceLang": "ko | en | de",
-  "phoneticGuide": "optional phonetic guide or pronunciation tips if needed",
+  "phoneticGuide": "optional phonetic guide if needed",
   "domainNotes": "brief technical context note if wallpen-specific terms were used",
   "suggestedReply": "a brief suggested professional follow-up statement in native target language"
 }
@@ -84,11 +90,16 @@ Output JSON format ONLY:
 
     const prompt = `
 [Context: ${context || "Wallpen Technical Video Conference"}]
-Source Text to Translate: "${text.trim()}"
+Source Text to Translate: "${cleanText}"
 Requested Target Language Code: "${targetLang}"
 `;
 
-    let responseText = "";
+    let translatedResultText = "";
+    let detectedSourceLang = sourceLang === "auto" ? (hasKoreanChars ? "ko" : "en") : sourceLang;
+    let domainNotes = "Wallpen Industrial Machinery Terminology";
+    let suggestedReply = "";
+
+    // 1. Primary: Gemini Translation
     try {
       const response = await ai.models.generateContent({
         model: "gemini-3.7-flash",
@@ -98,40 +109,61 @@ Requested Target Language Code: "${targetLang}"
           responseMimeType: "application/json",
         },
       });
-      responseText = response.text || "";
+      const responseText = response.text || "";
+      const parsed = safeParseJson<any>(responseText, null);
+      if (parsed && parsed.translatedText && typeof parsed.translatedText === "string") {
+        const candidate = parsed.translatedText.trim();
+        // Verify translation didn't just echo the input
+        if (
+          candidate &&
+          (targetLang === "ko" || !/[\uAC00-\uD7AF]/.test(candidate) || !hasKoreanChars)
+        ) {
+          translatedResultText = candidate;
+          if (parsed.detectedSourceLang) detectedSourceLang = parsed.detectedSourceLang;
+          if (parsed.domainNotes) domainNotes = parsed.domainNotes;
+          if (parsed.suggestedReply) suggestedReply = parsed.suggestedReply;
+        }
+      }
     } catch (apiErr: any) {
-      console.warn("Gemini Translation API notice (using local domain engine):", apiErr?.message || apiErr);
-      // Fallback domain translation logic
-      const fallbackTranslation = getLocalDomainTranslation(text, targetLang);
-      return res.json({
-        success: true,
-        originalText: text,
-        translatedText: fallbackTranslation.translatedText,
-        detectedSourceLang: sourceLang === "auto" ? "ko" : sourceLang,
-        phoneticGuide: fallbackTranslation.phoneticGuide || "",
-        domainNotes: fallbackTranslation.domainNotes || "Wallpen Industrial Machinery Terminology",
-        suggestedReply: fallbackTranslation.suggestedReply || "",
-        timestamp: new Date().toISOString(),
-        isLocalFallback: true,
-      });
+      console.warn("Gemini Translation notice (switching to high-speed auxiliary engine):", apiErr?.message || apiErr);
     }
 
-    const parsed = safeParseJson(responseText, {
-      translatedText: text,
-      detectedSourceLang: sourceLang === "auto" ? "ko" : sourceLang,
-      phoneticGuide: "",
-      domainNotes: "",
-      suggestedReply: "",
-    });
+    // 2. Secondary: Fast Auxiliary Translation Engine if Gemini was unavailable or returned untranslated text
+    if (!translatedResultText || (isTargetEn && /[\uAC00-\uD7AF]/.test(translatedResultText))) {
+      try {
+        const fetchUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${hasKoreanChars ? "ko" : "auto"}&tl=${targetLang}&dt=t&q=${encodeURIComponent(cleanText)}`;
+        const gRes = await fetch(fetchUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
+        if (gRes.ok) {
+          const gData = await gRes.json();
+          if (Array.isArray(gData) && Array.isArray(gData[0])) {
+            const joined = gData[0].map((chunk: any) => chunk[0]).join("").trim();
+            if (joined) {
+              translatedResultText = joined;
+              domainNotes = "Eurotech-Wallpen Live Translation Service";
+            }
+          }
+        }
+      } catch (gErr) {
+        console.warn("Auxiliary translation notice:", gErr);
+      }
+    }
+
+    // 3. Tertiary: Local Domain Engine Fallback
+    if (!translatedResultText || (isTargetEn && /[\uAC00-\uD7AF]/.test(translatedResultText))) {
+      const fallbackTranslation = getLocalDomainTranslation(cleanText, targetLang);
+      translatedResultText = fallbackTranslation.translatedText;
+      domainNotes = fallbackTranslation.domainNotes || domainNotes;
+      suggestedReply = fallbackTranslation.suggestedReply || suggestedReply;
+    }
 
     res.json({
       success: true,
-      originalText: text,
-      translatedText: parsed.translatedText || text,
-      detectedSourceLang: parsed.detectedSourceLang || (sourceLang === "auto" ? "ko" : sourceLang),
-      phoneticGuide: parsed.phoneticGuide || "",
-      domainNotes: parsed.domainNotes || "",
-      suggestedReply: parsed.suggestedReply || "",
+      originalText: cleanText,
+      translatedText: translatedResultText || cleanText,
+      detectedSourceLang,
+      phoneticGuide: "",
+      domainNotes,
+      suggestedReply,
       timestamp: new Date().toISOString(),
     });
   } catch (error: any) {
@@ -239,6 +271,21 @@ function getLocalDomainTranslation(text: string, targetLang: string) {
       en: "Thank you for your hard work.",
       de: "Vielen Dank für Ihre Arbeit.",
       ko: "수고하셨습니다.",
+    },
+    "이게 비즈니스 영어가 맞나": {
+      en: "Is this appropriate business English?",
+      de: "Ist das angemessenes Geschäftsenglisch?",
+      ko: "이게 비즈니스 영어가 맞나요?",
+    },
+    "이게 비즈니스 영어가 맞나요": {
+      en: "Is this appropriate business English?",
+      de: "Ist das angemessenes Geschäftsenglisch?",
+      ko: "이게 비즈니스 영어가 맞나요?",
+    },
+    "비즈니스 영어로 어떻게 말하나요": {
+      en: "How do you say this in professional business English?",
+      de: "Wie sagt man das im geschäftlichen Englisch?",
+      ko: "비즈니스 영어로 어떻게 말하나요?",
     },
   };
 
