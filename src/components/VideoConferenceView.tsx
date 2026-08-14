@@ -120,6 +120,28 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
     }
   }, [messages, currentSubtitle]);
 
+  // Available Browser Voices Cache
+  const [voicesList, setVoicesList] = useState<SpeechSynthesisVoice[]>([]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    
+    const updateVoices = () => {
+      const v = window.speechSynthesis.getVoices();
+      if (v && v.length > 0) {
+        setVoicesList(v);
+      }
+    };
+
+    updateVoices();
+    window.speechSynthesis.onvoiceschanged = updateVoices;
+    return () => {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.onvoiceschanged = null;
+      }
+    };
+  }, []);
+
   // Helper: Convert Blob to Base64
   const blobToBase64 = (blob: Blob): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -134,82 +156,61 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
     });
   };
 
-  // Helper: Voice Synthesis (TTS)
+  // Helper: High Quality Voice Synthesis (TTS)
   const speakText = useCallback((text: string, langCode: string) => {
-    if (!isTtsEnabled || !('speechSynthesis' in window)) return;
+    if (!isTtsEnabled || !('speechSynthesis' in window) || !text || !text.trim()) return;
     try {
       window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
+      const cleanText = text.replace(/\[.*?\]/g, '').trim(); // Clean bracket notes
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      const allVoices = voicesList.length > 0 ? voicesList : window.speechSynthesis.getVoices();
+
       if (langCode === 'ko') {
         utterance.lang = 'ko-KR';
+        const koVoice = allVoices.find(
+          (v) =>
+            (v.lang === 'ko-KR' || v.lang.startsWith('ko')) &&
+            (v.name.includes('Google') || v.name.includes('Natural') || v.name.includes('Yuna') || v.name.includes('Heami') || v.name.includes('Korean'))
+        ) || allVoices.find((v) => v.lang.startsWith('ko'));
+        if (koVoice) utterance.voice = koVoice;
       } else if (langCode === 'de') {
         utterance.lang = 'de-DE';
+        const deVoice = allVoices.find(
+          (v) =>
+            (v.lang === 'de-DE' || v.lang.startsWith('de')) &&
+            (v.name.includes('Google') || v.name.includes('Natural') || v.name.includes('Katja') || v.name.includes('Hedda') || v.name.includes('German'))
+        ) || allVoices.find((v) => v.lang.startsWith('de'));
+        if (deVoice) utterance.voice = deVoice;
       } else {
         utterance.lang = 'en-US';
-        const voices = window.speechSynthesis.getVoices();
-        const usVoice = voices.find(
+        // Priority high quality US English voices
+        const usVoice = allVoices.find(
           (v) =>
-            v.lang === 'en-US' ||
-            v.name.includes('US') ||
-            v.name.includes('American') ||
-            v.name.includes('Google US English') ||
-            v.name.includes('Samantha')
-        );
+            v.lang === 'en-US' &&
+            (v.name.includes('Natural') ||
+             v.name.includes('Google US English') ||
+             v.name.includes('Samantha') ||
+             v.name.includes('Jenny') ||
+             v.name.includes('Ava') ||
+             v.name.includes('Guy') ||
+             v.name.includes('Aria') ||
+             v.name.includes('David'))
+        ) || allVoices.find((v) => v.lang === 'en-US' || v.lang.startsWith('en'));
         if (usVoice) utterance.voice = usVoice;
       }
-      utterance.rate = 0.95;
+
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      utterance.volume = 1.0;
       window.speechSynthesis.speak(utterance);
     } catch (e) {
       console.warn('Speech synthesis error:', e);
     }
-  }, [isTtsEnabled]);
+  }, [isTtsEnabled, voicesList]);
 
-  // Fallback Translation helper
-  const getFallbackTranslation = (text: string, sourceLang: string, targetLang: string) => {
-    const lower = text.toLowerCase();
-    if (sourceLang === 'ko' && (targetLang === 'en' || targetLang === 'de')) {
-      if (lower.includes('노즐') || lower.includes('테스트')) {
-        return targetLang === 'en'
-          ? 'We have completed the printhead nozzle calibration and test.'
-          : 'Wir haben den Druckkopfdüsentest und die Kalibrierung vor Ort abgeschlossen.';
-      }
-      if (lower.includes('벽면') || lower.includes('센서') || lower.includes('거리')) {
-        return targetLang === 'en'
-          ? 'The laser surface distance sensors are calibrated and measuring properly.'
-          : 'Die Laser-Wandabstandssensoren sind kalibriert und messen ordnungsgemäß.';
-      }
-      if (lower.includes('안녕') || lower.includes('반갑')) {
-        return targetLang === 'en'
-          ? 'Hello! Welcome to our Wallpen technical video conference.'
-          : 'Guten Tag! Willkommen zu unserer Wallpen-Konferenz.';
-      }
-      if (lower.includes('잉크') || lower.includes('uv') || lower.includes('경화')) {
-        return targetLang === 'en'
-          ? 'The UV ink curing temperature and UV lamp output are running within optimal range.'
-          : 'Die UV-Tintenhärtungstemperatur und die UV-Lampenleistung liegen im optimalen Bereich.';
-      }
-      if (lower.includes('발주') || lower.includes('수주') || lower.includes('장비')) {
-        return targetLang === 'en'
-          ? 'We are confirming the purchase order for additional Wallpen units and spare parts.'
-          : 'Wir bestätigen die Bestellung für zusätzliche Wallpen-Geräte und Ersatzteile.';
-      }
-      return targetLang === 'en'
-        ? `[US Native English] ${text} - (Processed technical inquiry for Wallpen system)`
-        : `[DE] ${text} - (Wir haben Ihre technische Anfrage erhalten)`;
-    }
-    if (targetLang === 'ko') {
-      if (lower.includes('hello') || lower.includes('welcome') || lower.includes('guten tag')) {
-        return '안녕하세요! 오늘 화상회의에 오신 것을 환영합니다.';
-      }
-      if (lower.includes('nozzle') || lower.includes('printhead') || lower.includes('düsen')) {
-        return '프린트헤드 노즐 점검 및 캘리브레이션 결과를 확인했습니다.';
-      }
-      if (lower.includes('sensor') || lower.includes('laser') || lower.includes('distance')) {
-        return '벽면 레이저 거리 측정 센서의 상태를 확인하였습니다.';
-      }
-      return `[한국어 통역] ${text}`;
-    }
-    return text;
+  // Fallback Translation helper (preserves true text, never invents dummy sentences)
+  const getFallbackTranslation = (text: string, _sourceLang: string, _targetLang: string) => {
+    return text.trim();
   };
 
   // Perform translation via Gemini backend API + Fallback handler
