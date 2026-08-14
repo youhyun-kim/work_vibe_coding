@@ -78,6 +78,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
   const [audioFrequencies, setAudioFrequencies] = useState<number[]>([0, 0, 0, 0, 0, 0, 0, 0]);
   const [isAutoSttEnabled, setIsAutoSttEnabled] = useState<boolean>(true);
   const [isSpeakingActive, setIsSpeakingActive] = useState<boolean>(false);
+  const [micSensitivity, setMicSensitivity] = useState<'ultra' | 'high' | 'standard'>('ultra');
   const [isRecordingManualAudio, setIsRecordingManualAudio] = useState<boolean>(false);
   const [manualRecordSeconds, setManualRecordSeconds] = useState<number>(0);
   const [sttStatusMessage, setSttStatusMessage] = useState<string>('🎙️ 마이크 권한 허용 후 실시간 음성인식이 시작됩니다.');
@@ -104,6 +105,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
   const transcriptContainerRef = useRef<HTMLDivElement | null>(null);
   const audioStreamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animFrameRef = useRef<number | null>(null);
 
@@ -122,6 +124,8 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
   const webSpeechRecognitionRef = useRef<any>(null);
   const isRecognitionRunningRef = useRef<boolean>(false);
   const restartRecognitionTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const interimCommitTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingInterimRef = useRef<string>('');
   const lastProcessedTextRef = useRef<{ text: string; time: number }>({ text: '', time: 0 });
 
   // Scroll transcript to top on new message
@@ -517,7 +521,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
-          noiseSuppression: true,
+          noiseSuppression: false, // Prevents swallowing soft voice
           autoGainControl: true,
         },
       });
@@ -525,18 +529,29 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       audioStreamRef.current = stream;
       setMicPermissionState('granted');
       setIsVirtualMicActive(false);
-      setSttStatusMessage('🎤 마이크 연결됨 (말씀하시면 실시간 자막이 생성됩니다)');
+      setSttStatusMessage('🎤 마이크 연결됨 (초고감도 음성 센싱 가동 중)');
 
       // Setup Web Audio Analyser for visualizer, VAD & Pitch / Gender estimation
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       if (AudioCtx) {
         const ctx = new AudioCtx();
+        if (ctx.state === 'suspended') {
+          ctx.resume().catch((e) => console.log('AudioContext resume note:', e));
+        }
         audioContextRef.current = ctx;
         const src = ctx.createMediaStreamSource(stream);
+
+        // Hardware Gain Boost for ultra-sensitive pickup
+        const gainNode = ctx.createGain();
+        const multiplier = micSensitivity === 'ultra' ? 3.5 : micSensitivity === 'high' ? 2.0 : 1.0;
+        gainNode.gain.setValueAtTime(multiplier, ctx.currentTime);
+        gainNodeRef.current = gainNode;
+
         const analyser = ctx.createAnalyser();
         analyser.fftSize = 512;
-        analyser.smoothingTimeConstant = 0.4; // Responsive smoothing
-        src.connect(analyser);
+        analyser.smoothingTimeConstant = 0.3; // Highly responsive smoothing
+        src.connect(gainNode);
+        gainNode.connect(analyser);
         analyserRef.current = analyser;
 
         const freqData = new Uint8Array(analyser.frequencyBinCount);
@@ -554,7 +569,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
             sumSquares += normalized * normalized;
           }
           const rms = Math.sqrt(sumSquares / timeData.length);
-          const computedVolume = Math.min(100, Math.round(rms * 280));
+          const computedVolume = Math.min(100, Math.round(rms * 320));
 
           // 8-Band Frequency Visualizer
           const bands: number[] = [0, 0, 0, 0, 0, 0, 0, 0];
@@ -568,7 +583,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
           setAudioFrequencies(bands.map((b) => Math.min(100, Math.round((b / 255) * 100))));
 
           // Voice Fundamental Frequency (F0) & Gender Estimation
-          const SPEECH_THRESHOLD = 8;
+          const SPEECH_THRESHOLD = micSensitivity === 'ultra' ? 2 : micSensitivity === 'high' ? 4 : 8;
           if (computedVolume >= SPEECH_THRESHOLD && ctx.sampleRate) {
             let maxEnergy = 0;
             let peakBin = 0;
@@ -585,7 +600,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
               }
             }
 
-            if (maxEnergy > 35) {
+            if (maxEnergy > 25) {
               const estimatedHz = Math.round(peakBin * binHz);
               if (estimatedHz >= 80 && estimatedHz <= 320) {
                 setEstimatedPitchHz(estimatedHz);
@@ -602,7 +617,7 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
               isCurrentlySpeakingRef.current = true;
               setIsSpeakingActive(true);
               speechStartTimestampRef.current = Date.now();
-              setSttStatusMessage('🗣️ [음성 인식 중] 말씀하시는 음성을 실시간 수신하고 있습니다...');
+              setSttStatusMessage('🗣️ [초정밀 음성 센싱 중] 말씀하시는 음성을 실시간 수신하고 있습니다...');
 
               if (silenceTimerRef.current) {
                 clearTimeout(silenceTimerRef.current);
@@ -619,9 +634,9 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
               silenceTimerRef.current = setTimeout(() => {
                 isCurrentlySpeakingRef.current = false;
                 setIsSpeakingActive(false);
-                setSttStatusMessage('🎙️ [음성 없음 / 대기 중] 마이크가 정상 가동 중입니다.');
+                setSttStatusMessage('🎙️ [음성 대기 중] 마이크가 초고감도로 가동 중입니다.');
                 silenceTimerRef.current = null;
-              }, 700);
+              }, 500);
             }
           }
 
@@ -651,6 +666,14 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
       return null;
     }
   };
+
+  // Dynamic sensitivity gain effect
+  useEffect(() => {
+    if (gainNodeRef.current && audioContextRef.current) {
+      const multiplier = micSensitivity === 'ultra' ? 3.5 : micSensitivity === 'high' ? 2.0 : 1.0;
+      gainNodeRef.current.gain.setValueAtTime(multiplier, audioContextRef.current.currentTime);
+    }
+  }, [micSensitivity]);
 
   // Start parallel Web Speech API for zero-latency interim feedback
   const startWebSpeechRecognition = useCallback(() => {
@@ -697,8 +720,22 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
         const recognized = (final || interim).trim();
         if (recognized) {
           setLiveInterimSpeech(recognized);
+          pendingInterimRef.current = recognized;
+
           if (final && final.trim()) {
-            handleTranslateAndSpeak(final);
+            if (interimCommitTimerRef.current) clearTimeout(interimCommitTimerRef.current);
+            pendingInterimRef.current = '';
+            handleTranslateAndSpeak(final.trim());
+          } else {
+            // Auto-commit interim buffer after 750ms of silence so no phrase is dropped
+            if (interimCommitTimerRef.current) clearTimeout(interimCommitTimerRef.current);
+            interimCommitTimerRef.current = setTimeout(() => {
+              if (pendingInterimRef.current && pendingInterimRef.current.trim()) {
+                const committed = pendingInterimRef.current.trim();
+                pendingInterimRef.current = '';
+                handleTranslateAndSpeak(committed);
+              }
+            }, 750);
           }
         }
       };
@@ -712,17 +749,23 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
           if (restartRecognitionTimerRef.current) clearTimeout(restartRecognitionTimerRef.current);
           restartRecognitionTimerRef.current = setTimeout(() => {
             startWebSpeechRecognition();
-          }, 300);
+          }, 250);
         }
       };
 
       recognition.onend = () => {
         isRecognitionRunningRef.current = false;
+        // Commit any pending interim phrase before restart
+        if (pendingInterimRef.current && pendingInterimRef.current.trim()) {
+          const committed = pendingInterimRef.current.trim();
+          pendingInterimRef.current = '';
+          handleTranslateAndSpeak(committed);
+        }
         if (!isMuted && isAutoSttEnabled) {
           if (restartRecognitionTimerRef.current) clearTimeout(restartRecognitionTimerRef.current);
           restartRecognitionTimerRef.current = setTimeout(() => {
             startWebSpeechRecognition();
-          }, 120);
+          }, 100);
         }
       };
 
@@ -1046,6 +1089,26 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
               </option>
               <option value="de_to_ko" className="bg-slate-900 text-white">
                 🇩🇪 독일어 ➔ 🇰🇷 한국어 (KO)
+              </option>
+            </select>
+          </div>
+
+          {/* Mic Sensitivity Boost Selector */}
+          <div className="flex items-center space-x-1.5 bg-slate-800 border border-slate-700 px-2.5 py-1 rounded-lg">
+            <span className="text-slate-300 font-medium">⚡ 마이크 감도:</span>
+            <select
+              value={micSensitivity}
+              onChange={(e: any) => setMicSensitivity(e.target.value)}
+              className="bg-transparent text-emerald-300 font-bold focus:outline-none cursor-pointer"
+            >
+              <option value="ultra" className="bg-slate-900 text-white">
+                ⚡ 초고감도 (3.5x 부스트 / 작은 목소리)
+              </option>
+              <option value="high" className="bg-slate-900 text-white">
+                🔊 고감도 (2.0x 부스트)
+              </option>
+              <option value="standard" className="bg-slate-900 text-white">
+                🎙️ 표준 감도 (1.0x)
               </option>
             </select>
           </div>
@@ -1417,7 +1480,42 @@ export const VideoConferenceView: React.FC<VideoConferenceViewProps> = ({
                 <span>{sttStatusMessage}</span>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Sensitivity Quick Toggle Pills */}
+                <div className="flex items-center bg-slate-900 border border-slate-700 rounded-lg p-0.5 text-[10px]">
+                  <span className="text-slate-400 px-1.5 font-medium">감도:</span>
+                  <button
+                    onClick={() => setMicSensitivity('ultra')}
+                    className={`px-2 py-0.5 rounded font-bold transition-colors ${
+                      micSensitivity === 'ultra'
+                        ? 'bg-emerald-500 text-slate-950 shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    ⚡ 초고감도 (3.5x)
+                  </button>
+                  <button
+                    onClick={() => setMicSensitivity('high')}
+                    className={`px-2 py-0.5 rounded font-bold transition-colors ${
+                      micSensitivity === 'high'
+                        ? 'bg-teal-500 text-slate-950 shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    🔊 고감도 (2.0x)
+                  </button>
+                  <button
+                    onClick={() => setMicSensitivity('standard')}
+                    className={`px-2 py-0.5 rounded font-bold transition-colors ${
+                      micSensitivity === 'standard'
+                        ? 'bg-slate-700 text-white shadow'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    🎙️ 표준 (1.0x)
+                  </button>
+                </div>
+
                 <button
                   onClick={() => setIsAutoSttEnabled(!isAutoSttEnabled)}
                   className={`text-[10px] font-bold px-2.5 py-1 rounded-lg border transition-colors ${
